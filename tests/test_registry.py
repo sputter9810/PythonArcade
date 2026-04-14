@@ -1,8 +1,8 @@
 from arcade_app.registry import GAME_REGISTRY
 
 
-def test_registry_has_16_games() -> None:
-    assert len(GAME_REGISTRY) == 16
+def test_registry_has_21_games() -> None:
+    assert len(GAME_REGISTRY) == 21
 
 
 def test_registry_ids_unique() -> None:

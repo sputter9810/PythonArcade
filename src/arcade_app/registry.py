@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from arcade_app.games.aim_trainer.game import AimTrainerGame
 from arcade_app.games.asteroids.game import AsteroidsGame
 from arcade_app.games.battleships.game import BattleshipsGame
 from arcade_app.games.breakout.game import BreakoutGame
@@ -24,6 +25,15 @@ from arcade_app.scenes.placeholder_game_scene import PlaceholderGameScene
 
 
 GAME_REGISTRY = [
+    {
+        "id": "aim_trainer",
+        "title": "Aim Trainer",
+        "description": "Click targets quickly, build accuracy, and maximise your reaction-speed score.",
+        "category": "Skill",
+        "modes": ["Solo"],
+        "implemented": True,
+        "scene_class": AimTrainerGame,
+    },
     {
         "id": "tic_tac_toe",
         "title": "Tic Tac Toe",
