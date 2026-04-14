@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "python-arcade"
+version = "0.1.0"
+description = "A scalable Python mini-game arcade built with Pygame."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "pygame>=2.6.0,<3.0.0"
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
