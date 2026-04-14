@@ -4,10 +4,13 @@ from arcade_app.games.asteroids.game import AsteroidsGame
 from arcade_app.games.battleships.game import BattleshipsGame
 from arcade_app.games.breakout.game import BreakoutGame
 from arcade_app.games.connect4.game import Connect4Game
+from arcade_app.games.flappy_bird.game import FlappyBirdGame
 from arcade_app.games.game_2048.game import Game2048
 from arcade_app.games.hangman.game import HangmanGame
+from arcade_app.games.maze.game import MazeGame
 from arcade_app.games.memory_match.game import MemoryMatchGame
 from arcade_app.games.minesweeper.game import MinesweeperGame
+from arcade_app.games.platformer.game import PlatformerGame
 from arcade_app.games.pong.game import PongGame
 from arcade_app.games.simon_says.game import SimonSaysGame
 from arcade_app.games.snake.game import SnakeGame
@@ -15,6 +18,7 @@ from arcade_app.games.space_invaders.game import SpaceInvadersGame
 from arcade_app.games.sudoku.game import SudokuGame
 from arcade_app.games.tetris.game import TetrisGame
 from arcade_app.games.tic_tac_toe.game import TicTacToeGame
+from arcade_app.games.top_down_shooter.game import TopDownShooterGame
 from arcade_app.games.whac_a_mole.game import WhacAMoleGame
 from arcade_app.scenes.placeholder_game_scene import PlaceholderGameScene
 
@@ -23,7 +27,7 @@ GAME_REGISTRY = [
     {
         "id": "tic_tac_toe",
         "title": "Tic Tac Toe",
-        "description": "Classic 3x3 strategy.",
+        "description": "Classic 3x3 strategy game with PvP and PvC play.",
         "category": "Strategy",
         "modes": ["PvP", "PvC"],
         "implemented": True,
@@ -32,7 +36,7 @@ GAME_REGISTRY = [
     {
         "id": "hangman",
         "title": "Hangman",
-        "description": "Guess the hidden word.",
+        "description": "Guess the hidden word from themed categories before you run out of lives.",
         "category": "Word",
         "modes": ["Solo"],
         "implemented": True,
@@ -41,7 +45,7 @@ GAME_REGISTRY = [
     {
         "id": "snake",
         "title": "Snake",
-        "description": "Grow longer and survive.",
+        "description": "Grow longer, avoid collisions, and chase a higher score.",
         "category": "Arcade",
         "modes": ["Solo"],
         "implemented": True,
@@ -50,7 +54,7 @@ GAME_REGISTRY = [
     {
         "id": "connect4",
         "title": "Connect 4",
-        "description": "Four in a row wins.",
+        "description": "Drop discs and connect four before your opponent does.",
         "category": "Strategy",
         "modes": ["PvP", "PvC"],
         "implemented": True,
@@ -59,7 +63,7 @@ GAME_REGISTRY = [
     {
         "id": "battleships",
         "title": "Battleships",
-        "description": "Hunt the enemy fleet.",
+        "description": "Place your fleet and hunt down the enemy ships.",
         "category": "Strategy",
         "modes": ["PvP", "PvC"],
         "implemented": True,
@@ -68,7 +72,7 @@ GAME_REGISTRY = [
     {
         "id": "pong",
         "title": "Pong",
-        "description": "The original arcade rally.",
+        "description": "The classic paddle rally with PvP and PvC play.",
         "category": "Arcade",
         "modes": ["PvP", "PvC"],
         "implemented": True,
@@ -77,7 +81,7 @@ GAME_REGISTRY = [
     {
         "id": "breakout",
         "title": "Breakout",
-        "description": "Smash the brick wall.",
+        "description": "Bounce the ball, break the bricks, and protect your lives.",
         "category": "Arcade",
         "modes": ["Solo"],
         "implemented": True,
@@ -86,7 +90,7 @@ GAME_REGISTRY = [
     {
         "id": "memory_match",
         "title": "Memory Match",
-        "description": "Flip and find pairs.",
+        "description": "Flip cards, match pairs, and test your memory across difficulties.",
         "category": "Puzzle",
         "modes": ["Solo"],
         "implemented": True,
@@ -95,7 +99,7 @@ GAME_REGISTRY = [
     {
         "id": "game_2048",
         "title": "2048",
-        "description": "Merge your way to 2048.",
+        "description": "Slide and merge tiles to reach the 2048 block.",
         "category": "Puzzle",
         "modes": ["Solo"],
         "implemented": True,
@@ -104,7 +108,7 @@ GAME_REGISTRY = [
     {
         "id": "whac_a_mole",
         "title": "Whac-A-Mole",
-        "description": "Hit fast, score faster.",
+        "description": "React quickly and hit moles before time runs out.",
         "category": "Arcade",
         "modes": ["Solo"],
         "implemented": True,
@@ -113,7 +117,7 @@ GAME_REGISTRY = [
     {
         "id": "space_invaders",
         "title": "Space Invaders",
-        "description": "Defend against alien waves.",
+        "description": "Defend the base, defeat alien waves, and collect shooting powerups.",
         "category": "Arcade",
         "modes": ["Solo"],
         "implemented": True,
@@ -122,7 +126,7 @@ GAME_REGISTRY = [
     {
         "id": "asteroids",
         "title": "Asteroids",
-        "description": "Pilot, shoot, and survive.",
+        "description": "Pilot through space, blast asteroids, and survive each wave.",
         "category": "Arcade",
         "modes": ["Solo"],
         "implemented": True,
@@ -131,7 +135,7 @@ GAME_REGISTRY = [
     {
         "id": "sudoku",
         "title": "Sudoku",
-        "description": "Logic puzzle challenge.",
+        "description": "Solve a fresh puzzle each run with notes and mistake tracking.",
         "category": "Puzzle",
         "modes": ["Solo"],
         "implemented": True,
@@ -140,7 +144,7 @@ GAME_REGISTRY = [
     {
         "id": "minesweeper",
         "title": "Minesweeper",
-        "description": "Clear the grid safely.",
+        "description": "Reveal safe cells, place flags, and clear the minefield.",
         "category": "Puzzle",
         "modes": ["Solo"],
         "implemented": True,
@@ -149,7 +153,7 @@ GAME_REGISTRY = [
     {
         "id": "tetris",
         "title": "Tetris",
-        "description": "Stack pieces efficiently.",
+        "description": "Stack falling pieces efficiently and clear lines for score.",
         "category": "Arcade",
         "modes": ["Solo"],
         "implemented": True,
@@ -158,11 +162,47 @@ GAME_REGISTRY = [
     {
         "id": "simon_says",
         "title": "Simon Says",
-        "description": "Repeat the colour sequence.",
+        "description": "Memorise the sequence and repeat it correctly for as long as you can.",
         "category": "Memory",
         "modes": ["Solo"],
         "implemented": True,
         "scene_class": SimonSaysGame,
+    },
+    {
+        "id": "flappy_bird",
+        "title": "Flappy Bird",
+        "description": "Navigate through pipes by flapping and survive as long as possible.",
+        "category": "Arcade",
+        "modes": ["Solo"],
+        "implemented": True,
+        "scene_class": FlappyBirdGame,
+    },
+    {
+        "id": "top_down_shooter",
+        "title": "Top-Down Shooter",
+        "description": "Move, aim with the mouse, survive enemy waves, and chase a high score.",
+        "category": "Action",
+        "modes": ["Solo"],
+        "implemented": True,
+        "scene_class": TopDownShooterGame,
+    },
+    {
+        "id": "maze",
+        "title": "Maze",
+        "description": "Navigate a freshly generated maze and find the exit in as few steps as possible.",
+        "category": "Puzzle",
+        "modes": ["Solo"],
+        "implemented": True,
+        "scene_class": MazeGame,
+    },
+    {
+        "id": "platformer",
+        "title": "Platformer",
+        "description": "Jump across platforms, collect every coin, and reach the exit.",
+        "category": "Action",
+        "modes": ["Solo"],
+        "implemented": True,
+        "scene_class": PlatformerGame,
     },
 ]
 
