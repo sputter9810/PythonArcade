@@ -16,7 +16,6 @@ class AimTrainerGame(GameBase):
     SESSION_LENGTH = 30.0
     TARGET_BASE_RADIUS = 34
     TARGET_MIN_RADIUS = 22
-    TARGET_MAX_RADIUS = 42
     TARGET_LIFETIME_START = 1.1
     TARGET_LIFETIME_MIN = 0.5
 
@@ -118,6 +117,17 @@ class AimTrainerGame(GameBase):
             return 0
         return int(self.best_reaction_time * 1000)
 
+    def get_persistence_payload(self) -> dict:
+        payload = super().get_persistence_payload()
+        payload["hits"] = self.hits
+        payload["accuracy"] = round(self.accuracy(), 1)
+
+        best_reaction_ms = self.best_reaction_ms()
+        if best_reaction_ms > 0:
+            payload["reaction_ms"] = best_reaction_ms
+
+        return payload
+
     def leave_to_menu(self) -> None:
         from arcade_app.scenes.game_select_scene import GameSelectScene
 
@@ -155,15 +165,12 @@ class AimTrainerGame(GameBase):
                 if self.is_game_over:
                     continue
 
-                self.shots_taken += 1
                 mouse_pos = pygame.Vector2(event.pos)
                 distance = mouse_pos.distance_to(self.target_center)
 
                 if distance <= self.target_radius:
-                    self.shots_taken -= 1
                     self.handle_hit()
                 else:
-                    self.shots_taken -= 1
                     self.handle_miss()
 
     def update(self, dt: float) -> None:

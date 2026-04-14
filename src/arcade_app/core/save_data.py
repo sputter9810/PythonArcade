@@ -10,6 +10,7 @@ from typing import Any
 DEFAULT_SAVE_DATA = {
     "app": {
         "last_played_game_id": None,
+        "recent_game_ids": [],
         "updated_at": None,
         "settings": {
             "fullscreen": False,
@@ -65,6 +66,10 @@ class SaveDataManager:
                     merged_settings = deepcopy(DEFAULT_SAVE_DATA["app"]["settings"])
                     merged_settings.update(app_settings)
                     self.data["app"]["settings"] = merged_settings
+
+                recent_games = self.data["app"].get("recent_game_ids")
+                if not isinstance(recent_games, list):
+                    self.data["app"]["recent_game_ids"] = []
         except (json.JSONDecodeError, OSError):
             self.data = deepcopy(DEFAULT_SAVE_DATA)
             self.save()
@@ -86,12 +91,21 @@ class SaveDataManager:
                 "best_round": None,
                 "best_wave": None,
                 "best_lines": None,
+                "best_hits": None,
+                "best_accuracy": None,
+                "best_reaction_ms": None,
                 "last_played_at": None,
             }
         return games[game_id]
 
     def set_last_played(self, game_id: str) -> None:
         self.data["app"]["last_played_game_id"] = game_id
+
+        recent_ids = self.data["app"].setdefault("recent_game_ids", [])
+        recent_ids = [existing for existing in recent_ids if existing != game_id]
+        recent_ids.insert(0, game_id)
+        self.data["app"]["recent_game_ids"] = recent_ids[:5]
+
         game_entry = self.ensure_game_entry(game_id)
         game_entry["last_played_at"] = self._timestamp()
         self.save()
@@ -127,10 +141,35 @@ class SaveDataManager:
             if best_lines is None or lines_value > best_lines:
                 game_entry["best_lines"] = lines_value
 
+        hits_value = payload.get("hits")
+        if isinstance(hits_value, int):
+            best_hits = game_entry.get("best_hits")
+            if best_hits is None or hits_value > best_hits:
+                game_entry["best_hits"] = hits_value
+
+        accuracy_value = payload.get("accuracy")
+        if isinstance(accuracy_value, (int, float)):
+            accuracy_float = float(accuracy_value)
+            best_accuracy = game_entry.get("best_accuracy")
+            if best_accuracy is None or accuracy_float > best_accuracy:
+                game_entry["best_accuracy"] = round(accuracy_float, 1)
+
+        reaction_ms_value = payload.get("reaction_ms")
+        if isinstance(reaction_ms_value, int):
+            best_reaction = game_entry.get("best_reaction_ms")
+            if best_reaction is None or reaction_ms_value < best_reaction:
+                game_entry["best_reaction_ms"] = reaction_ms_value
+
         self.save()
 
     def get_last_played_game_id(self) -> str | None:
         return self.data.get("app", {}).get("last_played_game_id")
+
+    def get_recent_game_ids(self) -> list[str]:
+        recent_games = self.data.get("app", {}).get("recent_game_ids", [])
+        if isinstance(recent_games, list):
+            return [game_id for game_id in recent_games if isinstance(game_id, str)]
+        return []
 
     def get_game_stats(self, game_id: str) -> dict[str, Any]:
         return deepcopy(self.data.get("games", {}).get(game_id, {}))
