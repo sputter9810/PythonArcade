@@ -7,48 +7,57 @@ import pygame
 
 from arcade_app.core.game_base import GameBase
 from arcade_app.ui import theme
+from arcade_app.ui.game_ui import GameUI
 
 
 class TopDownShooterGame(GameBase):
     game_id = "top_down_shooter"
     title = "Top-Down Shooter"
 
+    POWERUP_RAPID_FIRE = "rapid_fire"
+    POWERUP_PIERCE = "pierce"
+    POWERUP_HEAL = "heal"
+
     def __init__(self, app) -> None:
         super().__init__(app)
 
-        self.title_font: pygame.font.Font | None = None
-        self.info_font: pygame.font.Font | None = None
-        self.small_font: pygame.font.Font | None = None
+        self.ui: GameUI | None = None
 
-        self.play_rect = pygame.Rect(0, 0, 1100, 620)
+        self.play_rect = pygame.Rect(0, 0, 1100, 640)
 
         self.player_pos = pygame.Vector2(0, 0)
-        self.player_radius = 20
-        self.player_speed = 320.0
-        self.player_health = 5
-        self.player_max_health = 5
+        self.player_speed = 280.0
+        self.player_radius = 18
 
         self.bullets: list[dict] = []
-        self.bullet_speed = 620.0
-        self.bullet_radius = 5
-        self.shoot_delay = 0.18
-        self.shoot_timer = 0.0
-
         self.enemies: list[dict] = []
-        self.enemy_spawn_padding = 40
+        self.powerups: list[dict] = []
+        self.popups: list[dict] = []
 
         self.wave = 1
         self.score = 0
-        self.is_game_over = False
-        self.is_won = False
+        self.lives = 3
 
-        self.max_waves = 6
+        self.game_over = False
+        self.paused = False
+
+        self.shoot_cooldown = 0.0
+        self.enemy_spawn_timer = 0.0
+
+        self.rapid_fire_timer = 0.0
+        self.pierce_timer = 0.0
 
     def enter(self) -> None:
-        self.title_font = pygame.font.SysFont("arial", theme.HEADING_SIZE, bold=True)
-        self.info_font = pygame.font.SysFont("arial", theme.BODY_SIZE)
-        self.small_font = pygame.font.SysFont("arial", theme.CAPTION_SIZE)
+        self.ui = GameUI()
         self.reset_game()
+
+    def rebuild_layout(self, screen: pygame.Surface) -> None:
+        self.play_rect = pygame.Rect(
+            (screen.get_width() - 1100) // 2,
+            165,
+            1100,
+            640,
+        )
 
     def reset_game(self) -> None:
         screen = pygame.display.get_surface()
@@ -56,74 +65,125 @@ class TopDownShooterGame(GameBase):
             self.rebuild_layout(screen)
 
         self.player_pos = pygame.Vector2(self.play_rect.centerx, self.play_rect.centery)
-        self.player_health = self.player_max_health
-
         self.bullets.clear()
         self.enemies.clear()
-        self.shoot_timer = 0.0
+        self.powerups.clear()
+        self.popups.clear()
 
         self.wave = 1
         self.score = 0
-        self.is_game_over = False
-        self.is_won = False
+        self.lives = 3
 
+        self.game_over = False
+        self.paused = False
+
+        self.shoot_cooldown = 0.0
+        self.enemy_spawn_timer = 1.0
+        self.rapid_fire_timer = 0.0
+        self.pierce_timer = 0.0
         self.spawn_wave()
-
-    def rebuild_layout(self, screen: pygame.Surface) -> None:
-        self.play_rect = pygame.Rect(
-            (screen.get_width() - 1100) // 2,
-            140,
-            1100,
-            620,
-        )
 
     def spawn_wave(self) -> None:
         self.enemies.clear()
+        count = 4 + self.wave * 2
 
-        enemy_count = 3 + self.wave * 2
-        for _ in range(enemy_count):
-            spawn_pos = self.random_edge_spawn()
-            enemy = {
-                "pos": spawn_pos,
-                "radius": 18,
-                "speed": 85.0 + self.wave * 8,
-                "health": 2 if self.wave < 3 else 3,
-                "damage_cooldown": 0.0,
-            }
-            self.enemies.append(enemy)
+        for _ in range(count):
+            self.enemies.append(self.spawn_enemy())
 
-    def random_edge_spawn(self) -> pygame.Vector2:
-        side = random.choice(["top", "bottom", "left", "right"])
-
-        if side == "top":
-            x = random.uniform(self.play_rect.left + 20, self.play_rect.right - 20)
-            y = self.play_rect.top + self.enemy_spawn_padding
-        elif side == "bottom":
-            x = random.uniform(self.play_rect.left + 20, self.play_rect.right - 20)
-            y = self.play_rect.bottom - self.enemy_spawn_padding
-        elif side == "left":
-            x = self.play_rect.left + self.enemy_spawn_padding
-            y = random.uniform(self.play_rect.top + 20, self.play_rect.bottom - 20)
+    def spawn_enemy(self) -> dict:
+        edge = random.choice(["top", "bottom", "left", "right"])
+        if edge == "top":
+            pos = pygame.Vector2(random.randint(self.play_rect.left, self.play_rect.right), self.play_rect.top - 30)
+        elif edge == "bottom":
+            pos = pygame.Vector2(random.randint(self.play_rect.left, self.play_rect.right), self.play_rect.bottom + 30)
+        elif edge == "left":
+            pos = pygame.Vector2(self.play_rect.left - 30, random.randint(self.play_rect.top, self.play_rect.bottom))
         else:
-            x = self.play_rect.right - self.enemy_spawn_padding
-            y = random.uniform(self.play_rect.top + 20, self.play_rect.bottom - 20)
+            pos = pygame.Vector2(self.play_rect.right + 30, random.randint(self.play_rect.top, self.play_rect.bottom))
 
-        return pygame.Vector2(x, y)
+        return {
+            "pos": pos,
+            "radius": random.randint(14, 22),
+            "speed": random.uniform(70, 120) + self.wave * 6,
+            "hp": 1,
+        }
 
-    def fire_bullet(self, mouse_pos: tuple[int, int]) -> None:
-        direction = pygame.Vector2(mouse_pos[0] - self.player_pos.x, mouse_pos[1] - self.player_pos.y)
-        if direction.length_squared() == 0:
+    def maybe_spawn_powerup(self, pos: pygame.Vector2) -> None:
+        if random.random() > 0.16:
             return
 
-        direction = direction.normalize()
+        kind = random.choice([self.POWERUP_RAPID_FIRE, self.POWERUP_PIERCE, self.POWERUP_HEAL])
+        color = (
+            theme.ACCENT if kind == self.POWERUP_RAPID_FIRE
+            else theme.WARNING if kind == self.POWERUP_PIERCE
+            else theme.SUCCESS
+        )
 
-        bullet = {
-            "pos": self.player_pos.copy(),
-            "vel": direction * self.bullet_speed,
-            "radius": self.bullet_radius,
-            "life": 1.5,
-        }
-        self.bullets.append(bullet)
+        self.powerups.append(
+            {
+                "kind": kind,
+                "pos": pygame.Vector2(pos.x, pos.y),
+                "radius": 13,
+                "color": color,
+            }
+        )
+
+    def add_popup(self, text: str, pos: tuple[int, int], color: tuple[int, int, int]) -> None:
+        self.popups.append(
+            {
+                "text": text,
+                "pos": pygame.Vector2(pos[0], pos[1]),
+                "vel": pygame.Vector2(0, -34),
+                "life": 0.6,
+                "max_life": 0.6,
+                "color": color,
+                "alpha": 255,
+            }
+        )
+
+    def update_popups(self, dt: float) -> None:
+        updated: list[dict] = []
+        for popup in self.popups:
+            popup["life"] -= dt
+            if popup["life"] <= 0:
+                continue
+            popup["pos"] += popup["vel"] * dt
+            popup["alpha"] = int(255 * (popup["life"] / popup["max_life"]))
+            updated.append(popup)
+        self.popups = updated
+
+    def fire_bullet(self) -> None:
+        if self.shoot_cooldown > 0 or self.game_over or self.paused:
+            return
+
+        mouse_pos = pygame.Vector2(pygame.mouse.get_pos())
+        direction = mouse_pos - self.player_pos
+        if direction.length_squared() == 0:
+            direction = pygame.Vector2(1, 0)
+        else:
+            direction = direction.normalize()
+
+        self.bullets.append(
+            {
+                "pos": pygame.Vector2(self.player_pos.x, self.player_pos.y),
+                "vel": direction * 520,
+                "life": 1.2,
+                "pierce": self.pierce_timer > 0,
+            }
+        )
+        self.shoot_cooldown = 0.07 if self.rapid_fire_timer > 0 else 0.14
+
+    def collect_powerup(self, powerup: dict) -> None:
+        if powerup["kind"] == self.POWERUP_RAPID_FIRE:
+            self.rapid_fire_timer = 8.0
+            self.add_popup("RAPID FIRE", (int(powerup["pos"].x), int(powerup["pos"].y)), theme.ACCENT)
+        elif powerup["kind"] == self.POWERUP_PIERCE:
+            self.pierce_timer = 8.0
+            self.add_popup("PIERCE", (int(powerup["pos"].x), int(powerup["pos"].y)), theme.WARNING)
+        else:
+            if self.lives < 5:
+                self.lives += 1
+            self.add_popup("+1 LIFE", (int(powerup["pos"].x), int(powerup["pos"].y)), theme.SUCCESS)
 
     def handle_events(self, events: list[pygame.event.Event]) -> None:
         for event in events:
@@ -131,18 +191,44 @@ class TopDownShooterGame(GameBase):
                 if event.key == pygame.K_ESCAPE:
                     from arcade_app.scenes.game_select_scene import GameSelectScene
                     self.app.scene_manager.go_to(GameSelectScene(self.app))
+                elif event.key == pygame.K_p and not self.game_over:
+                    self.paused = not self.paused
                 elif event.key == pygame.K_F5:
                     self.reset_game()
+                elif event.key == pygame.K_SPACE:
+                    if self.game_over:
+                        self.reset_game()
+                    else:
+                        self.fire_bullet()
 
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if not self.is_game_over and not self.is_won and self.shoot_timer <= 0:
-                    self.fire_bullet(event.pos)
-                    self.shoot_timer = self.shoot_delay
+                if self.game_over:
+                    self.reset_game()
+                else:
+                    self.fire_bullet()
 
-    def update_player(self, dt: float) -> None:
+    def update(self, dt: float) -> None:
+        screen = pygame.display.get_surface()
+        if screen is not None:
+            self.rebuild_layout(screen)
+
+        self.update_popups(dt)
+
+        if self.paused:
+            return
+
+        if self.game_over:
+            return
+
+        if self.shoot_cooldown > 0:
+            self.shoot_cooldown -= dt
+        if self.rapid_fire_timer > 0:
+            self.rapid_fire_timer -= dt
+        if self.pierce_timer > 0:
+            self.pierce_timer -= dt
+
         keys = pygame.key.get_pressed()
         move = pygame.Vector2(0, 0)
-
         if keys[pygame.K_w] or keys[pygame.K_UP]:
             move.y -= 1
         if keys[pygame.K_s] or keys[pygame.K_DOWN]:
@@ -153,220 +239,135 @@ class TopDownShooterGame(GameBase):
             move.x += 1
 
         if move.length_squared() > 0:
-            move = move.normalize() * self.player_speed * dt
-            self.player_pos += move
+            move = move.normalize()
 
-        self.player_pos.x = max(
-            self.play_rect.left + self.player_radius,
-            min(self.play_rect.right - self.player_radius, self.player_pos.x),
-        )
-        self.player_pos.y = max(
-            self.play_rect.top + self.player_radius,
-            min(self.play_rect.bottom - self.player_radius, self.player_pos.y),
-        )
+        self.player_pos += move * self.player_speed * dt
+        self.player_pos.x = max(self.play_rect.left + self.player_radius, min(self.player_pos.x, self.play_rect.right - self.player_radius))
+        self.player_pos.y = max(self.play_rect.top + self.player_radius, min(self.player_pos.y, self.play_rect.bottom - self.player_radius))
 
-    def update_bullets(self, dt: float) -> None:
-        for bullet in self.bullets[:]:
+        for bullet in self.bullets:
             bullet["pos"] += bullet["vel"] * dt
             bullet["life"] -= dt
+        self.bullets = [b for b in self.bullets if b["life"] > 0 and self.play_rect.collidepoint(b["pos"].x, b["pos"].y)]
 
-            if bullet["life"] <= 0:
-                self.bullets.remove(bullet)
-                continue
-
-            if not self.play_rect.collidepoint(int(bullet["pos"].x), int(bullet["pos"].y)):
-                self.bullets.remove(bullet)
-                continue
-
-    def update_enemies(self, dt: float) -> None:
         for enemy in self.enemies:
             direction = self.player_pos - enemy["pos"]
             if direction.length_squared() > 0:
-                direction = direction.normalize()
-                enemy["pos"] += direction * enemy["speed"] * dt
+                enemy["pos"] += direction.normalize() * enemy["speed"] * dt
 
-            if enemy["damage_cooldown"] > 0:
-                enemy["damage_cooldown"] -= dt
+        remaining_bullets: list[dict] = []
+        remaining_enemies = self.enemies.copy()
 
-    def handle_collisions(self) -> None:
-        # Bullet -> enemy
-        for bullet in self.bullets[:]:
-            hit_enemy = None
+        for bullet in self.bullets:
+            hit_any = False
+            hits_this_bullet: list[dict] = []
 
-            for enemy in self.enemies:
-                distance = bullet["pos"].distance_to(enemy["pos"])
-                if distance <= bullet["radius"] + enemy["radius"]:
-                    hit_enemy = enemy
-                    break
+            for enemy in remaining_enemies:
+                if bullet["pos"].distance_to(enemy["pos"]) <= enemy["radius"] + 4:
+                    hits_this_bullet.append(enemy)
+                    hit_any = True
+                    reward = 75
+                    self.score += reward
+                    self.add_popup(f"+{reward}", (int(enemy["pos"].x), int(enemy["pos"].y)), theme.ACCENT)
+                    self.maybe_spawn_powerup(enemy["pos"])
+                    if not bullet["pierce"]:
+                        break
 
-            if hit_enemy is not None:
-                hit_enemy["health"] -= 1
-                if bullet in self.bullets:
-                    self.bullets.remove(bullet)
+            for enemy in hits_this_bullet:
+                if enemy in remaining_enemies:
+                    remaining_enemies.remove(enemy)
 
-                if hit_enemy["health"] <= 0 and hit_enemy in self.enemies:
-                    self.enemies.remove(hit_enemy)
-                    self.score += 100
+            if not hit_any or bullet["pierce"]:
+                remaining_bullets.append(bullet)
 
-        # Enemy -> player
-        for enemy in self.enemies:
-            distance = self.player_pos.distance_to(enemy["pos"])
-            if distance <= self.player_radius + enemy["radius"]:
-                if enemy["damage_cooldown"] <= 0:
-                    self.player_health -= 1
-                    enemy["damage_cooldown"] = 0.8
+        self.bullets = remaining_bullets
+        self.enemies = remaining_enemies
 
-                    if self.player_health <= 0:
-                        self.player_health = 0
-                        self.is_game_over = True
-                        return
+        for powerup in self.powerups[:]:
+            if self.player_pos.distance_to(powerup["pos"]) <= self.player_radius + powerup["radius"]:
+                self.collect_powerup(powerup)
+                self.powerups.remove(powerup)
 
-    def update_wave_progression(self) -> None:
-        if not self.enemies and not self.is_game_over:
-            if self.wave >= self.max_waves:
-                self.is_won = True
-            else:
-                self.wave += 1
-                self.spawn_wave()
+        for enemy in self.enemies[:]:
+            if enemy["pos"].distance_to(self.player_pos) <= enemy["radius"] + self.player_radius:
+                self.lives -= 1
+                self.enemies.remove(enemy)
+                if self.lives <= 0:
+                    self.game_over = True
+                break
 
-    def draw_crosshair(self, screen: pygame.Surface) -> None:
-        mouse_x, mouse_y = pygame.mouse.get_pos()
-        size = 10
-        pygame.draw.line(screen, theme.TEXT, (mouse_x - size, mouse_y), (mouse_x + size, mouse_y), 2)
-        pygame.draw.line(screen, theme.TEXT, (mouse_x, mouse_y - size), (mouse_x, mouse_y + size), 2)
+        if not self.enemies and not self.game_over:
+            self.wave += 1
+            self.spawn_wave()
 
     def draw_player(self, screen: pygame.Surface) -> None:
-        pygame.draw.circle(
+        mouse_pos = pygame.Vector2(pygame.mouse.get_pos())
+        direction = mouse_pos - self.player_pos
+        angle = 0.0 if direction.length_squared() == 0 else math.atan2(direction.y, direction.x)
+
+        nose = self.player_pos + pygame.Vector2(math.cos(angle), math.sin(angle)) * 22
+        left = self.player_pos + pygame.Vector2(math.cos(angle + 2.4), math.sin(angle + 2.4)) * 16
+        right = self.player_pos + pygame.Vector2(math.cos(angle - 2.4), math.sin(angle - 2.4)) * 16
+
+        color = theme.WARNING if self.pierce_timer > 0 else theme.TEXT
+        pygame.draw.polygon(
             screen,
-            theme.ACCENT,
-            (int(self.player_pos.x), int(self.player_pos.y)),
-            self.player_radius,
+            color,
+            [(int(nose.x), int(nose.y)), (int(left.x), int(left.y)), (int(right.x), int(right.y))],
         )
 
-        mouse_pos = pygame.mouse.get_pos()
-        aim = pygame.Vector2(mouse_pos[0] - self.player_pos.x, mouse_pos[1] - self.player_pos.y)
-        if aim.length_squared() > 0:
-            aim = aim.normalize()
-            end_pos = self.player_pos + aim * (self.player_radius + 10)
-            pygame.draw.line(
-                screen,
-                theme.TEXT,
-                (int(self.player_pos.x), int(self.player_pos.y)),
-                (int(end_pos.x), int(end_pos.y)),
-                4,
-            )
-
-    def draw_enemies(self, screen: pygame.Surface) -> None:
-        for enemy in self.enemies:
-            pygame.draw.circle(
-                screen,
-                theme.DANGER,
-                (int(enemy["pos"].x), int(enemy["pos"].y)),
-                enemy["radius"],
-            )
-
-    def draw_bullets(self, screen: pygame.Surface) -> None:
-        for bullet in self.bullets:
-            pygame.draw.circle(
-                screen,
-                theme.WARNING,
-                (int(bullet["pos"].x), int(bullet["pos"].y)),
-                bullet["radius"],
-            )
-
-    def draw_health_bar(self, screen: pygame.Surface) -> None:
-        bar_width = 220
-        bar_height = 20
-        x = self.play_rect.left
-        y = 108
-
-        pygame.draw.rect(screen, theme.SURFACE_ALT, (x, y, bar_width, bar_height), border_radius=8)
-
-        fill_ratio = self.player_health / self.player_max_health
-        fill_width = int(bar_width * fill_ratio)
-
-        pygame.draw.rect(
-            screen,
-            theme.SUCCESS if fill_ratio > 0.4 else theme.WARNING if fill_ratio > 0.2 else theme.DANGER,
-            (x, y, fill_width, bar_height),
-            border_radius=8,
-        )
-
-    def update(self, dt: float) -> None:
-        screen = pygame.display.get_surface()
-        if screen is not None:
-            self.rebuild_layout(screen)
-
-        if self.shoot_timer > 0:
-            self.shoot_timer -= dt
-
-        if self.is_game_over or self.is_won:
-            return
-
-        self.update_player(dt)
-        self.update_bullets(dt)
-        self.update_enemies(dt)
-        self.handle_collisions()
-        self.update_wave_progression()
+    def draw_powerup(self, screen: pygame.Surface, powerup: dict) -> None:
+        pygame.draw.circle(screen, powerup["color"], (int(powerup["pos"].x), int(powerup["pos"].y)), powerup["radius"])
+        pygame.draw.circle(screen, theme.BACKGROUND, (int(powerup["pos"].x), int(powerup["pos"].y)), max(4, powerup["radius"] // 2))
 
     def render(self, screen: pygame.Surface) -> None:
-        assert self.title_font is not None
-        assert self.info_font is not None
-        assert self.small_font is not None
+        assert self.ui is not None
 
         self.rebuild_layout(screen)
         screen.fill(theme.BACKGROUND)
 
-        title = self.title_font.render("Top-Down Shooter", True, theme.TEXT)
-
-        if self.is_won:
-            status_text = "You cleared all waves!"
-        elif self.is_game_over:
-            status_text = "Game Over"
-        else:
-            status_text = "Survive the enemy waves"
-
-        status = self.info_font.render(status_text, True, theme.TEXT)
-        score = self.info_font.render(f"Score: {self.score}", True, theme.TEXT)
-        wave = self.info_font.render(f"Wave: {self.wave}/{self.max_waves}", True, theme.TEXT)
-        health = self.small_font.render(f"Health: {self.player_health}/{self.player_max_health}", True, theme.TEXT)
-
-        controls = self.info_font.render(
-            "Move: WASD  |  Aim: Mouse  |  Shoot: Left Click  |  F5: Restart  |  Esc: Back",
-            True,
-            theme.MUTED_TEXT,
+        self.ui.draw_header(
+            screen,
+            "Top-Down Shooter",
+            "Move with WASD / Arrows. Aim with the mouse. Fire with Click or Space.",
         )
-
-        screen.blit(title, title.get_rect(center=(screen.get_width() // 2, 32)))
-        screen.blit(status, status.get_rect(center=(screen.get_width() // 2, 75)))
-        screen.blit(score, score.get_rect(center=(screen.get_width() // 2 - 160, 110)))
-        screen.blit(wave, wave.get_rect(center=(screen.get_width() // 2 + 160, 110)))
-        screen.blit(health, health.get_rect(midleft=(self.play_rect.left, 92)))
-        screen.blit(controls, controls.get_rect(center=(screen.get_width() // 2, screen.get_height() - 28)))
+        self.ui.draw_stats_row(
+            screen,
+            [
+                f"Score: {self.score}",
+                f"Lives: {self.lives}",
+                f"Wave: {self.wave}",
+                f"Rapid: {'ON' if self.rapid_fire_timer > 0 else 'OFF'}",
+                f"Pierce: {'ON' if self.pierce_timer > 0 else 'OFF'}",
+            ],
+        )
+        self.ui.draw_sub_stats(screen, "Powerups: blue = rapid fire, yellow = pierce, green = heal.")
+        self.ui.draw_footer(screen, "P: Pause  |  F5: Restart  |  Esc: Back")
 
         pygame.draw.rect(screen, theme.SURFACE, self.play_rect, border_radius=theme.RADIUS_MEDIUM)
+        pygame.draw.rect(screen, theme.SURFACE_ALT, self.play_rect, width=2, border_radius=theme.RADIUS_MEDIUM)
 
-        # subtle arena grid
-        grid_step = 40
-        for x in range(self.play_rect.left, self.play_rect.right, grid_step):
-            pygame.draw.line(screen, theme.SURFACE_ALT, (x, self.play_rect.top), (x, self.play_rect.bottom), 1)
-        for y in range(self.play_rect.top, self.play_rect.bottom, grid_step):
-            pygame.draw.line(screen, theme.SURFACE_ALT, (self.play_rect.left, y), (self.play_rect.right, y), 1)
+        for enemy in self.enemies:
+            pygame.draw.circle(screen, theme.DANGER, (int(enemy["pos"].x), int(enemy["pos"].y)), enemy["radius"])
 
-        self.draw_bullets(screen)
-        self.draw_enemies(screen)
+        for powerup in self.powerups:
+            self.draw_powerup(screen, powerup)
+
+        for bullet in self.bullets:
+            color = theme.WARNING if bullet["pierce"] else theme.ACCENT
+            pygame.draw.circle(screen, color, (int(bullet["pos"].x), int(bullet["pos"].y)), 4)
+
         self.draw_player(screen)
-        self.draw_health_bar(screen)
-        self.draw_crosshair(screen)
+        self.ui.draw_floating_texts(screen, self.popups)
 
-        if self.is_game_over:
-            game_over = self.title_font.render("Game Over", True, theme.TEXT)
-            restart = self.info_font.render("Press F5 to restart", True, theme.MUTED_TEXT)
-            screen.blit(game_over, game_over.get_rect(center=(screen.get_width() // 2, screen.get_height() // 2 - 20)))
-            screen.blit(restart, restart.get_rect(center=(screen.get_width() // 2, screen.get_height() // 2 + 20)))
+        if self.paused and not self.game_over:
+            self.ui.draw_pause_overlay(screen, self.play_rect)
 
-        if self.is_won:
-            win_text = self.title_font.render("Victory!", True, theme.TEXT)
-            restart = self.info_font.render("Press F5 to play again", True, theme.MUTED_TEXT)
-            screen.blit(win_text, win_text.get_rect(center=(screen.get_width() // 2, screen.get_height() // 2 - 20)))
-            screen.blit(restart, restart.get_rect(center=(screen.get_width() // 2, screen.get_height() // 2 + 20)))
+        if self.game_over:
+            self.ui.draw_game_over(
+                screen,
+                self.play_rect,
+                "Game Over",
+                f"Final Score: {self.score}",
+                f"Final Wave: {self.wave}",
+            )

@@ -6,6 +6,7 @@ import pygame
 
 from arcade_app.core.game_base import GameBase
 from arcade_app.ui import theme
+from arcade_app.ui.game_ui import GameUI
 
 
 class EndlessRunnerGame(GameBase):
@@ -15,10 +16,7 @@ class EndlessRunnerGame(GameBase):
     def __init__(self, app) -> None:
         super().__init__(app)
 
-        self.title_font: pygame.font.Font | None = None
-        self.info_font: pygame.font.Font | None = None
-        self.small_font: pygame.font.Font | None = None
-        self.big_font: pygame.font.Font | None = None
+        self.ui: GameUI | None = None
 
         self.play_rect = pygame.Rect(0, 0, 1200, 620)
         self.ground_y = 0
@@ -47,6 +45,7 @@ class EndlessRunnerGame(GameBase):
         self.obstacles_cleared = 0
 
         self.game_over = False
+        self.paused = False
         self.base_speed = 420.0
         self.scroll_speed = self.base_speed
         self.spawn_timer = 0.0
@@ -56,10 +55,7 @@ class EndlessRunnerGame(GameBase):
         self.track_marks: list[float] = []
 
     def enter(self) -> None:
-        self.title_font = pygame.font.SysFont("arial", theme.HEADING_SIZE, bold=True)
-        self.info_font = pygame.font.SysFont("arial", theme.BODY_SIZE)
-        self.small_font = pygame.font.SysFont("arial", theme.CAPTION_SIZE)
-        self.big_font = pygame.font.SysFont("arial", 52, bold=True)
+        self.ui = GameUI()
         self.reset_game()
 
     def reset_game(self) -> None:
@@ -72,6 +68,7 @@ class EndlessRunnerGame(GameBase):
         self.best_chain = 0
         self.obstacles_cleared = 0
         self.game_over = False
+        self.paused = False
         self.scroll_speed = self.base_speed
         self.spawn_timer = 0.9
         self.obstacles.clear()
@@ -235,6 +232,9 @@ class EndlessRunnerGame(GameBase):
         if screen is not None:
             self.rebuild_layout(screen)
 
+        if self.paused:
+            return
+
         self.update_clouds(dt)
         self.update_track_marks(dt)
 
@@ -254,10 +254,12 @@ class EndlessRunnerGame(GameBase):
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     self.leave_to_menu()
+                elif event.key == pygame.K_p and not self.game_over:
+                    self.paused = not self.paused
                 elif event.key in (pygame.K_SPACE, pygame.K_UP, pygame.K_w):
                     if self.game_over:
                         self.reset_game()
-                    else:
+                    elif not self.paused:
                         self.request_jump()
                 elif event.key == pygame.K_F5:
                     self.reset_game()
@@ -265,7 +267,7 @@ class EndlessRunnerGame(GameBase):
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if self.game_over:
                     self.reset_game()
-                else:
+                elif not self.paused:
                     self.request_jump()
 
     def draw_background(self, screen: pygame.Surface) -> None:
@@ -357,57 +359,38 @@ class EndlessRunnerGame(GameBase):
                 pygame.draw.rect(screen, theme.BACKGROUND, band, border_radius=6)
 
     def render_hud(self, screen: pygame.Surface) -> None:
-        assert self.title_font is not None
-        assert self.info_font is not None
-        assert self.small_font is not None
+        assert self.ui is not None
 
-        title = self.title_font.render("Endless Runner", True, theme.TEXT)
-        subtitle = self.small_font.render(
-            "Jump with Space / W / Up. Duck with S / Down / Ctrl. F5 to restart, Esc to leave.",
-            True,
-            theme.MUTED_TEXT,
+        self.ui.draw_header(
+            screen,
+            "Endless Runner",
+            "Jump with Space / W / Up. Duck with S / Down / Ctrl. F5 restart, Esc back.",
         )
-        screen.blit(title, title.get_rect(center=(screen.get_width() // 2, 38)))
-        screen.blit(subtitle, subtitle.get_rect(center=(screen.get_width() // 2, 72)))
-
-        stat_y = 110
-        stats = [
-            f"Score: {self.score}",
-            f"Distance: {int(self.distance)}",
-            f"Cleared: {self.obstacles_cleared}",
-            f"Speed: {int(self.scroll_speed)}",
-        ]
-        spacing = 220
-        start_x = screen.get_width() // 2 - spacing * (len(stats) - 1) // 2
-        for index, text in enumerate(stats):
-            surface = self.info_font.render(text, True, theme.TEXT)
-            screen.blit(surface, surface.get_rect(center=(start_x + index * spacing, stat_y)))
+        self.ui.draw_stats_row(
+            screen,
+            [
+                f"Score: {self.score}",
+                f"Distance: {int(self.distance)}",
+                f"Cleared: {self.obstacles_cleared}",
+                f"Speed: {int(self.scroll_speed)}",
+            ],
+        )
+        self.ui.draw_sub_stats(
+            screen,
+            "Stay low under drones, clear hazards cleanly, and build distance.",
+        )
+        self.ui.draw_footer(screen, "P: Pause  |  F5: Restart  |  Esc: Back")
 
     def render_game_over_overlay(self, screen: pygame.Surface) -> None:
-        assert self.big_font is not None
-        assert self.info_font is not None
-        assert self.small_font is not None
+        assert self.ui is not None
 
-        panel = pygame.Rect(0, 0, 540, 230)
-        panel.center = self.play_rect.center
-        overlay = pygame.Surface((panel.width, panel.height), pygame.SRCALPHA)
-        overlay.fill((8, 10, 16, 220))
-        screen.blit(overlay, panel.topleft)
-        pygame.draw.rect(screen, theme.ACCENT, panel, width=2, border_radius=theme.RADIUS_MEDIUM)
-
-        title = self.big_font.render("Run Over", True, theme.TEXT)
-        score = self.info_font.render(f"Final Score: {self.score}", True, theme.TEXT)
-        cleared = self.info_font.render(f"Obstacles Cleared: {self.obstacles_cleared}", True, theme.TEXT)
-        controls = self.small_font.render(
-            "Press Space / Click / F5 to restart   |   Esc to go back",
-            True,
-            theme.MUTED_TEXT,
+        self.ui.draw_game_over(
+            screen,
+            self.play_rect,
+            "Run Over",
+            f"Final Score: {self.score}",
+            f"Obstacles Cleared: {self.obstacles_cleared}  |  Distance: {int(self.distance)}",
         )
-
-        screen.blit(title, title.get_rect(center=(panel.centerx, panel.top + 56)))
-        screen.blit(score, score.get_rect(center=(panel.centerx, panel.top + 114)))
-        screen.blit(cleared, cleared.get_rect(center=(panel.centerx, panel.top + 148)))
-        screen.blit(controls, controls.get_rect(center=(panel.centerx, panel.top + 192)))
 
     def render(self, screen: pygame.Surface) -> None:
         self.rebuild_layout(screen)
@@ -415,6 +398,10 @@ class EndlessRunnerGame(GameBase):
         self.render_hud(screen)
         self.draw_obstacles(screen)
         self.draw_player(screen)
+
+        if self.paused and not self.game_over:
+            assert self.ui is not None
+            self.ui.draw_pause_overlay(screen, self.play_rect)
 
         if self.game_over:
             self.render_game_over_overlay(screen)

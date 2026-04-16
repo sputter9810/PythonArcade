@@ -6,236 +6,259 @@ import pygame
 
 from arcade_app.core.game_base import GameBase
 from arcade_app.ui import theme
+from arcade_app.ui.game_ui import GameUI
 
 
 class SimonSaysGame(GameBase):
     game_id = "simon_says"
     title = "Simon Says"
 
+    COLORS = [
+        {"name": "Green", "base": (80, 170, 100), "bright": (130, 230, 150)},
+        {"name": "Red", "base": (190, 80, 80), "bright": (250, 130, 130)},
+        {"name": "Blue", "base": (80, 120, 200), "bright": (140, 180, 255)},
+        {"name": "Yellow", "base": (200, 180, 70), "bright": (255, 235, 120)},
+    ]
+
+    STATE_BUFFER = "buffer"
+    STATE_SHOW_ON = "show_on"
+    STATE_SHOW_OFF = "show_off"
+    STATE_INPUT = "input"
+    STATE_OVER = "over"
+
+    ROUND_START_BUFFER = 0.75
+    FLASH_ON_TIME = 0.55
+    FLASH_OFF_TIME = 0.22
+    INPUT_FLASH_TIME = 0.18
+
     def __init__(self, app) -> None:
         super().__init__(app)
+        self.ui: GameUI | None = None
+        self.label_font: pygame.font.Font | None = None
 
-        self.title_font: pygame.font.Font | None = None
-        self.info_font: pygame.font.Font | None = None
-        self.small_font: pygame.font.Font | None = None
-
-        self.board_rect = pygame.Rect(0, 0, 520, 520)
-        self.pad_rects: list[pygame.Rect] = []
-
-        self.base_colors = [
-            (180, 70, 70),   # red
-            (80, 170, 90),   # green
-            (80, 120, 210),  # blue
-            (220, 190, 80),  # yellow
-        ]
-        self.bright_colors = [
-            (240, 120, 120),
-            (130, 230, 140),
-            (130, 170, 255),
-            (255, 235, 130),
-        ]
+        self.play_rect = pygame.Rect(0, 0, 920, 620)
+        self.buttons: list[pygame.Rect] = []
 
         self.sequence: list[int] = []
-        self.player_index = 0
-        self.round_number = 0
+        self.input_index = 0
+        self.round_reached = 0
 
-        self.playback_index = 0
-        self.playback_timer = 0.0
-        self.playback_on_duration = 0.45
-        self.playback_off_duration = 0.20
-        self.active_pad: int | None = None
-        self.playback_showing = False
-
-        self.player_flash_timer = 0.0
-        self.player_flash_duration = 0.18
-
-        self.state = "idle"  # idle, playback, input, success, game_over
+        self.state = self.STATE_BUFFER
         self.state_timer = 0.0
+        self.show_index = 0
+        self.flash_button: int | None = None
+        self.status_text = "Get ready..."
 
-        self.score = 0
+        self.paused = False
 
     def enter(self) -> None:
-        self.title_font = pygame.font.SysFont("arial", theme.HEADING_SIZE, bold=True)
-        self.info_font = pygame.font.SysFont("arial", theme.BODY_SIZE)
-        self.small_font = pygame.font.SysFont("arial", theme.CAPTION_SIZE, bold=True)
+        self.ui = GameUI()
+        self.label_font = pygame.font.SysFont("arial", 24, bold=True)
         self.reset_game()
 
-    def reset_game(self) -> None:
-        self.sequence = []
-        self.player_index = 0
-        self.round_number = 0
-        self.playback_index = 0
-        self.playback_timer = 0.0
-        self.active_pad = None
-        self.playback_showing = False
-        self.player_flash_timer = 0.0
-        self.state_timer = 0.0
-        self.score = 0
-        self.start_next_round()
-
     def rebuild_layout(self, screen: pygame.Surface) -> None:
-        self.board_rect = pygame.Rect(
-            (screen.get_width() - 520) // 2,
-            180,
-            520,
-            520,
-        )
+        self.play_rect = pygame.Rect((screen.get_width() - 920) // 2, 165, 920, 620)
+        panel_size = 210
+        gap = 24
+        total = panel_size * 2 + gap
+        start_x = self.play_rect.centerx - total // 2
+        start_y = self.play_rect.centery - total // 2 + 30
 
-        gap = 18
-        pad_size = (self.board_rect.width - gap) // 2
-
-        x = self.board_rect.x
-        y = self.board_rect.y
-
-        self.pad_rects = [
-            pygame.Rect(x, y, pad_size, pad_size),
-            pygame.Rect(x + pad_size + gap, y, pad_size, pad_size),
-            pygame.Rect(x, y + pad_size + gap, pad_size, pad_size),
-            pygame.Rect(x + pad_size + gap, y + pad_size + gap, pad_size, pad_size),
+        self.buttons = [
+            pygame.Rect(start_x, start_y, panel_size, panel_size),
+            pygame.Rect(start_x + panel_size + gap, start_y, panel_size, panel_size),
+            pygame.Rect(start_x, start_y + panel_size + gap, panel_size, panel_size),
+            pygame.Rect(start_x + panel_size + gap, start_y + panel_size + gap, panel_size, panel_size),
         ]
 
-    def start_next_round(self) -> None:
+    def reset_game(self) -> None:
+        screen = pygame.display.get_surface()
+        if screen is not None:
+            self.rebuild_layout(screen)
+
+        self.sequence = [random.randint(0, 3)]
+        self.input_index = 0
+        self.round_reached = 1
+
+        self.state = self.STATE_BUFFER
+        self.state_timer = self.ROUND_START_BUFFER
+        self.show_index = 0
+        self.flash_button = None
+        self.status_text = "Get ready..."
+
+        self.paused = False
+
+    def get_persistence_payload(self) -> dict:
+        payload = super().get_persistence_payload()
+        payload["round"] = self.round_reached
+        payload["score"] = self.round_reached * 100
+        return payload
+
+    def leave_to_menu(self) -> None:
+        from arcade_app.scenes.game_select_scene import GameSelectScene
+        self.app.scene_manager.go_to(GameSelectScene(self.app))
+
+    def begin_demo_buffer(self, message: str = "Watch the pattern...") -> None:
+        self.state = self.STATE_BUFFER
+        self.state_timer = self.ROUND_START_BUFFER
+        self.show_index = 0
+        self.flash_button = None
+        self.status_text = message
+
+    def begin_next_round(self) -> None:
         self.sequence.append(random.randint(0, 3))
-        self.round_number += 1
-        self.player_index = 0
-        self.playback_index = 0
-        self.playback_timer = 0.0
-        self.active_pad = None
-        self.playback_showing = False
-        self.state = "playback"
+        self.round_reached = len(self.sequence)
+        self.input_index = 0
+        self.begin_demo_buffer("Next round...")
 
-    def get_status_text(self) -> str:
-        if self.state == "playback":
-            return "Watch the sequence"
-        if self.state == "input":
-            return "Repeat the sequence"
-        if self.state == "success":
-            return "Correct!"
-        if self.state == "game_over":
-            return "Wrong pad - Game Over"
-        return "Get ready"
+    def start_demo(self) -> None:
+        self.state = self.STATE_SHOW_ON
+        self.show_index = 0
+        self.flash_button = self.sequence[self.show_index]
+        self.state_timer = self.FLASH_ON_TIME
+        self.status_text = "Watch closely..."
 
-    def handle_player_choice(self, pad_index: int) -> None:
-        if self.state != "input":
+    def press_button(self, index: int) -> None:
+        if self.paused or self.state != self.STATE_INPUT:
             return
 
-        self.active_pad = pad_index
-        self.player_flash_timer = self.player_flash_duration
+        self.flash_button = index
+        self.state_timer = self.INPUT_FLASH_TIME
 
-        expected = self.sequence[self.player_index]
-        if pad_index != expected:
-            self.state = "game_over"
-            self.active_pad = pad_index
+        expected = self.sequence[self.input_index]
+        if index != expected:
+            self.state = self.STATE_OVER
+            self.status_text = "Wrong input."
             return
 
-        self.player_index += 1
-        self.score += 10
-
-        if self.player_index >= len(self.sequence):
-            self.state = "success"
-            self.state_timer = 0.6
+        self.input_index += 1
+        if self.input_index >= len(self.sequence):
+            self.begin_next_round()
 
     def handle_events(self, events: list[pygame.event.Event]) -> None:
+        key_map = {
+            pygame.K_q: 0,
+            pygame.K_w: 1,
+            pygame.K_a: 2,
+            pygame.K_s: 3,
+            pygame.K_1: 0,
+            pygame.K_2: 1,
+            pygame.K_3: 2,
+            pygame.K_4: 3,
+        }
+
         for event in events:
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
-                    from arcade_app.scenes.game_select_scene import GameSelectScene
-                    self.app.scene_manager.go_to(GameSelectScene(self.app))
+                    self.leave_to_menu()
+                elif event.key == pygame.K_p and self.state != self.STATE_OVER:
+                    self.paused = not self.paused
                 elif event.key == pygame.K_F5:
                     self.reset_game()
-                elif event.key == pygame.K_1:
-                    self.handle_player_choice(0)
-                elif event.key == pygame.K_2:
-                    self.handle_player_choice(1)
-                elif event.key == pygame.K_3:
-                    self.handle_player_choice(2)
-                elif event.key == pygame.K_4:
-                    self.handle_player_choice(3)
+                elif self.state == self.STATE_OVER and event.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER):
+                    self.reset_game()
+                elif event.key in key_map:
+                    self.press_button(key_map[event.key])
 
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if self.state != "input":
+                if self.state == self.STATE_OVER:
+                    self.reset_game()
                     continue
-
-                for i, rect in enumerate(self.pad_rects):
+                if self.paused:
+                    continue
+                for i, rect in enumerate(self.buttons):
                     if rect.collidepoint(event.pos):
-                        self.handle_player_choice(i)
+                        self.press_button(i)
                         break
-
-    def update_playback(self, dt: float) -> None:
-        if self.playback_index >= len(self.sequence):
-            self.state = "input"
-            self.active_pad = None
-            self.playback_showing = False
-            self.player_index = 0
-            return
-
-        self.playback_timer += dt
-
-        if not self.playback_showing:
-            if self.playback_timer >= self.playback_off_duration:
-                self.playback_timer = 0.0
-                self.playback_showing = True
-                self.active_pad = self.sequence[self.playback_index]
-        else:
-            if self.playback_timer >= self.playback_on_duration:
-                self.playback_timer = 0.0
-                self.playback_showing = False
-                self.active_pad = None
-                self.playback_index += 1
 
     def update(self, dt: float) -> None:
         screen = pygame.display.get_surface()
         if screen is not None:
             self.rebuild_layout(screen)
 
-        if self.player_flash_timer > 0:
-            self.player_flash_timer -= dt
-            if self.player_flash_timer <= 0 and self.state == "input":
-                self.active_pad = None
+        if self.paused or self.state == self.STATE_OVER:
+            return
 
-        if self.state == "playback":
-            self.update_playback(dt)
-        elif self.state == "success":
+        if self.state_timer > 0:
             self.state_timer -= dt
+
+        if self.state == self.STATE_BUFFER:
             if self.state_timer <= 0:
-                self.start_next_round()
+                self.start_demo()
 
-    def draw_pad(self, screen: pygame.Surface, rect: pygame.Rect, index: int) -> None:
-        is_active = self.active_pad == index
-        color = self.bright_colors[index] if is_active else self.base_colors[index]
+        elif self.state == self.STATE_SHOW_ON:
+            if self.state_timer <= 0:
+                self.flash_button = None
+                self.state = self.STATE_SHOW_OFF
+                self.state_timer = self.FLASH_OFF_TIME
 
-        pygame.draw.rect(screen, color, rect, border_radius=theme.RADIUS_LARGE)
-        pygame.draw.rect(screen, theme.SURFACE, rect, width=4, border_radius=theme.RADIUS_LARGE)
+        elif self.state == self.STATE_SHOW_OFF:
+            if self.state_timer <= 0:
+                self.show_index += 1
+                if self.show_index >= len(self.sequence):
+                    self.state = self.STATE_INPUT
+                    self.input_index = 0
+                    self.flash_button = None
+                    self.status_text = "Your turn."
+                else:
+                    self.flash_button = self.sequence[self.show_index]
+                    self.state = self.STATE_SHOW_ON
+                    self.state_timer = self.FLASH_ON_TIME
 
-        assert self.small_font is not None
-        label = self.small_font.render(str(index + 1), True, theme.TEXT)
-        screen.blit(label, label.get_rect(center=rect.center))
+        elif self.state == self.STATE_INPUT:
+            if self.flash_button is not None and self.state_timer <= 0:
+                self.flash_button = None
 
     def render(self, screen: pygame.Surface) -> None:
-        assert self.title_font is not None
-        assert self.info_font is not None
-        assert self.small_font is not None
+        assert self.ui is not None
+        assert self.label_font is not None
 
         self.rebuild_layout(screen)
         screen.fill(theme.BACKGROUND)
 
-        title = self.title_font.render("Simon Says", True, theme.TEXT)
-        status = self.info_font.render(self.get_status_text(), True, theme.TEXT)
-        round_text = self.info_font.render(f"Round: {self.round_number}", True, theme.TEXT)
-        score_text = self.info_font.render(f"Score: {self.score}", True, theme.TEXT)
-        controls = self.info_font.render(
-            "Mouse or Keys 1-4  |  F5: Restart  |  Esc: Back",
-            True,
-            theme.MUTED_TEXT,
+        self.ui.draw_header(
+            screen,
+            "Simon Says",
+            "Repeat the pattern. Use Q/W/A/S, 1-4, or click the panels.",
+        )
+        self.ui.draw_stats_row(
+            screen,
+            [
+                f"Round: {self.round_reached}",
+                f"Progress: {self.input_index}/{len(self.sequence) if self.state == self.STATE_INPUT else len(self.sequence)}",
+            ],
         )
 
-        screen.blit(title, title.get_rect(center=(screen.get_width() // 2, 35)))
-        screen.blit(status, status.get_rect(center=(screen.get_width() // 2, 80)))
-        screen.blit(round_text, round_text.get_rect(center=(screen.get_width() // 2 - 110, 115)))
-        screen.blit(score_text, score_text.get_rect(center=(screen.get_width() // 2 + 110, 115)))
-        screen.blit(controls, controls.get_rect(center=(screen.get_width() // 2, screen.get_height() - 30)))
+        if self.state == self.STATE_BUFFER:
+            sub = self.status_text
+        elif self.state in (self.STATE_SHOW_ON, self.STATE_SHOW_OFF):
+            sub = "Watch the demonstration carefully."
+        elif self.state == self.STATE_INPUT:
+            sub = "Repeat the full sequence in order."
+        else:
+            sub = "Sequence broken."
+        self.ui.draw_sub_stats(screen, sub)
+        self.ui.draw_footer(screen, "P: Pause  |  F5: Restart  |  Esc: Back")
 
-        pygame.draw.rect(screen, theme.SURFACE, self.board_rect, border_radius=theme.RADIUS_LARGE)
+        pygame.draw.rect(screen, theme.SURFACE, self.play_rect, border_radius=theme.RADIUS_MEDIUM)
+        pygame.draw.rect(screen, theme.SURFACE_ALT, self.play_rect, width=2, border_radius=theme.RADIUS_MEDIUM)
 
-        for i, rect in enumerate(self.pad_rects):
-            self.draw_pad(screen, rect, i)
+        for i, rect in enumerate(self.buttons):
+            color = self.COLORS[i]["bright"] if self.flash_button == i else self.COLORS[i]["base"]
+            pygame.draw.rect(screen, color, rect, border_radius=18)
+            pygame.draw.rect(screen, theme.TEXT, rect, width=2, border_radius=18)
+
+            label = self.label_font.render(self.COLORS[i]["name"], True, theme.BACKGROUND)
+            screen.blit(label, label.get_rect(center=rect.center))
+
+        if self.paused and self.state != self.STATE_OVER:
+            self.ui.draw_pause_overlay(screen, self.play_rect)
+
+        if self.state == self.STATE_OVER:
+            self.ui.draw_game_over(
+                screen,
+                self.play_rect,
+                "Sequence Broken",
+                f"Best Round: {self.round_reached}",
+                "Press Space / Click / F5 to restart.",
+            )

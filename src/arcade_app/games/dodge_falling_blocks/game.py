@@ -6,6 +6,7 @@ import pygame
 
 from arcade_app.core.game_base import GameBase
 from arcade_app.ui import theme
+from arcade_app.ui.game_ui import GameUI
 
 
 class DodgeFallingBlocksGame(GameBase):
@@ -15,10 +16,7 @@ class DodgeFallingBlocksGame(GameBase):
     def __init__(self, app) -> None:
         super().__init__(app)
 
-        self.title_font: pygame.font.Font | None = None
-        self.info_font: pygame.font.Font | None = None
-        self.small_font: pygame.font.Font | None = None
-        self.big_font: pygame.font.Font | None = None
+        self.ui: GameUI | None = None
 
         self.play_rect = pygame.Rect(0, 0, 900, 680)
 
@@ -27,22 +25,21 @@ class DodgeFallingBlocksGame(GameBase):
 
         self.blocks: list[dict] = []
         self.particles: list[dict] = []
+        self.popups: list[dict] = []
 
         self.score = 0
         self.survival_time = 0.0
         self.level = 1
         self.near_misses = 0
         self.game_over = False
+        self.paused = False
 
         self.spawn_timer = 0.0
         self.flash_timer = 0.0
         self.background_offset = 0.0
 
     def enter(self) -> None:
-        self.title_font = pygame.font.SysFont("arial", theme.HEADING_SIZE, bold=True)
-        self.info_font = pygame.font.SysFont("arial", theme.BODY_SIZE)
-        self.small_font = pygame.font.SysFont("arial", theme.CAPTION_SIZE)
-        self.big_font = pygame.font.SysFont("arial", 52, bold=True)
+        self.ui = GameUI()
         self.reset_game()
 
     def reset_game(self) -> None:
@@ -52,12 +49,14 @@ class DodgeFallingBlocksGame(GameBase):
 
         self.blocks.clear()
         self.particles.clear()
+        self.popups.clear()
 
         self.score = 0
         self.survival_time = 0.0
         self.level = 1
         self.near_misses = 0
         self.game_over = False
+        self.paused = False
 
         self.spawn_timer = 0.45
         self.flash_timer = 0.0
@@ -80,6 +79,30 @@ class DodgeFallingBlocksGame(GameBase):
         from arcade_app.scenes.game_select_scene import GameSelectScene
 
         self.app.scene_manager.go_to(GameSelectScene(self.app))
+
+    def add_popup(self, text: str, pos: tuple[int, int], color: tuple[int, int, int]) -> None:
+        self.popups.append(
+            {
+                "text": text,
+                "pos": pygame.Vector2(pos[0], pos[1]),
+                "vel": pygame.Vector2(0, -42),
+                "life": 0.65,
+                "max_life": 0.65,
+                "color": color,
+                "alpha": 255,
+            }
+        )
+
+    def update_popups(self, dt: float) -> None:
+        updated: list[dict] = []
+        for popup in self.popups:
+            popup["life"] -= dt
+            if popup["life"] <= 0:
+                continue
+            popup["pos"] += popup["vel"] * dt
+            popup["alpha"] = int(255 * (popup["life"] / popup["max_life"]))
+            updated.append(popup)
+        self.popups = updated
 
     def current_spawn_delay(self) -> float:
         return max(0.16, 0.48 - min(0.28, self.survival_time * 0.012))
@@ -170,6 +193,7 @@ class DodgeFallingBlocksGame(GameBase):
                     block["near_miss_awarded"] = True
                     self.near_misses += 1
                     self.score += 25
+                    self.add_popup("+25", (rect.centerx, rect.bottom + 12), theme.ACCENT)
 
             if rect.colliderect(self.player):
                 self.game_over = True
@@ -192,15 +216,19 @@ class DodgeFallingBlocksGame(GameBase):
         if screen is not None:
             self.rebuild_layout(screen)
 
-        self.background_offset += 180 * dt
         self.update_particles(dt)
+        self.update_popups(dt)
 
         if self.flash_timer > 0:
             self.flash_timer -= dt
 
+        if self.paused:
+            return
+
         if self.game_over:
             return
 
+        self.background_offset += 180 * dt
         self.survival_time += dt
         self.level = 1 + int(self.survival_time // 10)
         self.score = max(self.score, int(self.survival_time * 18) + self.near_misses * 25)
@@ -213,6 +241,8 @@ class DodgeFallingBlocksGame(GameBase):
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     self.leave_to_menu()
+                elif event.key == pygame.K_p and not self.game_over:
+                    self.paused = not self.paused
                 elif event.key == pygame.K_F5:
                     self.reset_game()
                 elif self.game_over and event.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER):
@@ -275,59 +305,38 @@ class DodgeFallingBlocksGame(GameBase):
             )
 
     def render_hud(self, screen: pygame.Surface) -> None:
-        assert self.title_font is not None
-        assert self.info_font is not None
-        assert self.small_font is not None
+        assert self.ui is not None
 
-        title = self.title_font.render("Dodge the Falling Blocks", True, theme.TEXT)
-        subtitle = self.small_font.render(
-            "Move with Arrow Keys or A/D. Survive, dodge cleanly, and avoid the drop. F5 restart, Esc back.",
-            True,
-            theme.MUTED_TEXT,
+        self.ui.draw_header(
+            screen,
+            "Dodge the Falling Blocks",
+            "Move with Arrow Keys or A/D. Survive cleanly and avoid the drop. F5 restart, Esc back.",
         )
-
-        screen.blit(title, title.get_rect(center=(screen.get_width() // 2, 38)))
-        screen.blit(subtitle, subtitle.get_rect(center=(screen.get_width() // 2, 72)))
-
-        stats = [
-            f"Score: {self.score}",
-            f"Time: {self.survival_time:0.1f}s",
-            f"Level: {self.level}",
-            f"Near Misses: {self.near_misses}",
-        ]
-
-        start_x = screen.get_width() // 2 - 330
-        gap = 220
-        for index, stat in enumerate(stats):
-            surface = self.info_font.render(stat, True, theme.TEXT)
-            screen.blit(surface, surface.get_rect(center=(start_x + index * gap, 112)))
+        self.ui.draw_stats_row(
+            screen,
+            [
+                f"Score: {self.score}",
+                f"Time: {self.survival_time:0.1f}s",
+                f"Level: {self.level}",
+                f"Near Misses: {self.near_misses}",
+            ],
+        )
+        self.ui.draw_sub_stats(
+            screen,
+            "Thread tight gaps for bonus near misses, but one collision ends the run.",
+        )
+        self.ui.draw_footer(screen, "P: Pause  |  F5: Restart  |  Esc: Back")
 
     def render_game_over_overlay(self, screen: pygame.Surface) -> None:
-        assert self.big_font is not None
-        assert self.info_font is not None
-        assert self.small_font is not None
+        assert self.ui is not None
 
-        panel = pygame.Rect(0, 0, 560, 240)
-        panel.center = self.play_rect.center
-
-        overlay = pygame.Surface((panel.width, panel.height), pygame.SRCALPHA)
-        overlay.fill((8, 10, 16, 220))
-        screen.blit(overlay, panel.topleft)
-        pygame.draw.rect(screen, theme.ACCENT, panel, width=2, border_radius=theme.RADIUS_MEDIUM)
-
-        title = self.big_font.render("Run Ended", True, theme.TEXT)
-        score = self.info_font.render(f"Final Score: {self.score}", True, theme.TEXT)
-        time_text = self.info_font.render(f"Survival Time: {self.survival_time:0.1f}s", True, theme.TEXT)
-        controls = self.small_font.render(
-            "Press Space / Enter / Click / F5 to restart   |   Esc to go back",
-            True,
-            theme.MUTED_TEXT,
+        self.ui.draw_game_over(
+            screen,
+            self.play_rect,
+            "Run Ended",
+            f"Final Score: {self.score}",
+            f"Survival Time: {self.survival_time:0.1f}s  |  Near Misses: {self.near_misses}",
         )
-
-        screen.blit(title, title.get_rect(center=(panel.centerx, panel.top + 58)))
-        screen.blit(score, score.get_rect(center=(panel.centerx, panel.top + 118)))
-        screen.blit(time_text, time_text.get_rect(center=(panel.centerx, panel.top + 152)))
-        screen.blit(controls, controls.get_rect(center=(panel.centerx, panel.top + 198)))
 
     def render(self, screen: pygame.Surface) -> None:
         self.rebuild_layout(screen)
@@ -336,6 +345,13 @@ class DodgeFallingBlocksGame(GameBase):
         self.draw_player(screen)
         self.draw_particles(screen)
         self.render_hud(screen)
+
+        if self.ui is not None:
+            self.ui.draw_floating_texts(screen, self.popups)
+
+        if self.paused and not self.game_over:
+            assert self.ui is not None
+            self.ui.draw_pause_overlay(screen, self.play_rect)
 
         if self.game_over:
             self.render_game_over_overlay(screen)

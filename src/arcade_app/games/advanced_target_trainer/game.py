@@ -6,6 +6,7 @@ import pygame
 
 from arcade_app.core.game_base import GameBase
 from arcade_app.ui import theme
+from arcade_app.ui.game_ui import GameUI
 
 
 class AdvancedTargetTrainerGame(GameBase):
@@ -21,18 +22,17 @@ class AdvancedTargetTrainerGame(GameBase):
     def __init__(self, app) -> None:
         super().__init__(app)
 
-        self.title_font: pygame.font.Font | None = None
-        self.info_font: pygame.font.Font | None = None
-        self.small_font: pygame.font.Font | None = None
-        self.big_font: pygame.font.Font | None = None
+        self.ui: GameUI | None = None
 
         self.play_rect = pygame.Rect(0, 0, 980, 640)
         self.lane_rects: list[pygame.Rect] = []
         self.targets: list[dict] = []
+        self.popups: list[dict] = []
 
         self.spawn_timer = 0.0
         self.time_left = self.SESSION_LENGTH
         self.game_over = False
+        self.paused = False
 
         self.score = 0
         self.hits = 0
@@ -44,10 +44,7 @@ class AdvancedTargetTrainerGame(GameBase):
         self.flash_timer = 0.0
 
     def enter(self) -> None:
-        self.title_font = pygame.font.SysFont("arial", theme.HEADING_SIZE, bold=True)
-        self.info_font = pygame.font.SysFont("arial", theme.BODY_SIZE)
-        self.small_font = pygame.font.SysFont("arial", theme.CAPTION_SIZE)
-        self.big_font = pygame.font.SysFont("arial", 52, bold=True)
+        self.ui = GameUI()
         self.reset_game()
 
     def reset_game(self) -> None:
@@ -56,9 +53,11 @@ class AdvancedTargetTrainerGame(GameBase):
             self.rebuild_layout(screen)
 
         self.targets = []
+        self.popups = []
         self.spawn_timer = 0.55
         self.time_left = self.SESSION_LENGTH
         self.game_over = False
+        self.paused = False
 
         self.score = 0
         self.hits = 0
@@ -110,6 +109,30 @@ class AdvancedTargetTrainerGame(GameBase):
         from arcade_app.scenes.game_select_scene import GameSelectScene
 
         self.app.scene_manager.go_to(GameSelectScene(self.app))
+
+    def add_popup(self, text: str, pos: tuple[int, int], color: tuple[int, int, int]) -> None:
+        self.popups.append(
+            {
+                "text": text,
+                "pos": pygame.Vector2(pos[0], pos[1]),
+                "vel": pygame.Vector2(0, -44),
+                "life": 0.65,
+                "max_life": 0.65,
+                "color": color,
+                "alpha": 255,
+            }
+        )
+
+    def update_popups(self, dt: float) -> None:
+        updated: list[dict] = []
+        for popup in self.popups:
+            popup["life"] -= dt
+            if popup["life"] <= 0:
+                continue
+            popup["pos"] += popup["vel"] * dt
+            popup["alpha"] = int(255 * (popup["life"] / popup["max_life"]))
+            updated.append(popup)
+        self.popups = updated
 
     def current_spawn_delay(self) -> float:
         progress = 1.0 - (self.time_left / self.SESSION_LENGTH)
@@ -173,24 +196,30 @@ class AdvancedTargetTrainerGame(GameBase):
         self.best_combo = max(self.best_combo, self.combo)
 
         combo_bonus = min(180, self.combo * 12)
-        self.score += target["value"] + combo_bonus
+        reward = target["value"] + combo_bonus
+        self.score += reward
         self.flash_timer = 0.10
+        self.add_popup(f"+{reward}", target["center"], theme.ACCENT)
 
-    def register_expired_target(self) -> None:
+    def register_expired_target(self, target: dict) -> None:
         self.misses += 1
         self.combo = 0
         self.score = max(0, self.score - 45)
+        self.add_popup("-45", target["center"], theme.WARNING)
 
-    def register_click_miss(self) -> None:
+    def register_click_miss(self, pos: tuple[int, int]) -> None:
         self.click_misses += 1
         self.combo = 0
         self.score = max(0, self.score - 25)
+        self.add_popup("-25", pos, theme.DANGER)
 
     def handle_events(self, events: list[pygame.event.Event]) -> None:
         for event in events:
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     self.leave_to_menu()
+                elif event.key == pygame.K_p and not self.game_over:
+                    self.paused = not self.paused
                 elif event.key == pygame.K_F5:
                     self.reset_game()
                 elif event.key == pygame.K_SPACE and self.game_over:
@@ -199,6 +228,9 @@ class AdvancedTargetTrainerGame(GameBase):
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if self.game_over:
                     self.reset_game()
+                    continue
+
+                if self.paused:
                     continue
 
                 mouse_pos = pygame.Vector2(event.pos)
@@ -212,14 +244,14 @@ class AdvancedTargetTrainerGame(GameBase):
                     self.register_hit(hit_target)
                     self.targets.remove(hit_target)
                 else:
-                    self.register_click_miss()
+                    self.register_click_miss((int(mouse_pos.x), int(mouse_pos.y)))
 
     def update_targets(self, dt: float) -> None:
         updated_targets: list[dict] = []
         for target in self.targets:
             target["time_left"] -= dt
             if target["time_left"] <= 0:
-                self.register_expired_target()
+                self.register_expired_target(target)
                 continue
             updated_targets.append(target)
         self.targets = updated_targets
@@ -229,8 +261,13 @@ class AdvancedTargetTrainerGame(GameBase):
         if screen is not None:
             self.rebuild_layout(screen)
 
+        self.update_popups(dt)
+
         if self.flash_timer > 0:
             self.flash_timer -= dt
+
+        if self.paused:
+            return
 
         if self.game_over:
             return
@@ -282,67 +319,39 @@ class AdvancedTargetTrainerGame(GameBase):
                 pygame.draw.rect(screen, target["color"], bar_rect, border_radius=999)
 
     def render_hud(self, screen: pygame.Surface) -> None:
-        assert self.title_font is not None
-        assert self.info_font is not None
-        assert self.small_font is not None
+        assert self.ui is not None
 
-        title = self.title_font.render("Advanced Target Trainer", True, theme.TEXT)
-        subtitle = self.small_font.render(
+        self.ui.draw_header(
+            screen,
+            "Advanced Target Trainer",
             "Click targets fast, keep combos alive, and avoid misses. F5 restart, Esc back.",
-            True,
-            theme.MUTED_TEXT,
         )
-
-        screen.blit(title, title.get_rect(center=(screen.get_width() // 2, 38)))
-        screen.blit(subtitle, subtitle.get_rect(center=(screen.get_width() // 2, 72)))
-
-        stats = [
-            f"Score: {self.score}",
-            f"Hits: {self.hits}",
-            f"Combo: {self.combo}",
-            f"Accuracy: {self.accuracy():0.1f}%",
-            f"Time: {self.time_left:0.1f}s",
-        ]
-        start_x = screen.get_width() // 2 - 360
-        gap = 180
-        for index, stat in enumerate(stats):
-            surface = self.info_font.render(stat, True, theme.TEXT)
-            screen.blit(surface, surface.get_rect(center=(start_x + index * gap, 112)))
-
-        detail_text = f"Expired Targets: {self.misses}  |  Click Misses: {self.click_misses}  |  Best Combo: {self.best_combo}"
-        detail_surface = self.small_font.render(detail_text, True, theme.MUTED_TEXT)
-        screen.blit(detail_surface, detail_surface.get_rect(center=(screen.get_width() // 2, 138)))
+        self.ui.draw_stats_row(
+            screen,
+            [
+                f"Score: {self.score}",
+                f"Hits: {self.hits}",
+                f"Combo: {self.combo}",
+                f"Accuracy: {self.accuracy():0.1f}%",
+                f"Time: {self.time_left:0.1f}s",
+            ],
+        )
+        self.ui.draw_sub_stats(
+            screen,
+            f"Expired Targets: {self.misses}  |  Click Misses: {self.click_misses}  |  Best Combo: {self.best_combo}",
+        )
+        self.ui.draw_footer(screen, "P: Pause  |  F5: Restart  |  Esc: Back")
 
     def render_game_over_overlay(self, screen: pygame.Surface) -> None:
-        assert self.big_font is not None
-        assert self.info_font is not None
-        assert self.small_font is not None
+        assert self.ui is not None
 
-        panel = pygame.Rect(0, 0, 580, 240)
-        panel.center = self.play_rect.center
-
-        overlay = pygame.Surface((panel.width, panel.height), pygame.SRCALPHA)
-        overlay.fill((8, 10, 16, 220))
-        screen.blit(overlay, panel.topleft)
-        pygame.draw.rect(screen, theme.ACCENT, panel, width=2, border_radius=theme.RADIUS_MEDIUM)
-
-        title = self.big_font.render("Session Complete", True, theme.TEXT)
-        score = self.info_font.render(f"Final Score: {self.score}", True, theme.TEXT)
-        summary = self.info_font.render(
+        self.ui.draw_game_over(
+            screen,
+            self.play_rect,
+            "Session Complete",
+            f"Final Score: {self.score}",
             f"Hits: {self.hits}  |  Accuracy: {self.accuracy():0.1f}%  |  Best Combo: {self.best_combo}",
-            True,
-            theme.TEXT,
         )
-        controls = self.small_font.render(
-            "Press Space / Click / F5 to restart   |   Esc to go back",
-            True,
-            theme.MUTED_TEXT,
-        )
-
-        screen.blit(title, title.get_rect(center=(panel.centerx, panel.top + 58)))
-        screen.blit(score, score.get_rect(center=(panel.centerx, panel.top + 118)))
-        screen.blit(summary, summary.get_rect(center=(panel.centerx, panel.top + 154)))
-        screen.blit(controls, controls.get_rect(center=(panel.centerx, panel.top + 198)))
 
     def render(self, screen: pygame.Surface) -> None:
         self.rebuild_layout(screen)
@@ -350,6 +359,13 @@ class AdvancedTargetTrainerGame(GameBase):
         self.draw_lane_grid(screen)
         self.draw_targets(screen)
         self.render_hud(screen)
+
+        if self.ui is not None:
+            self.ui.draw_floating_texts(screen, self.popups)
+
+        if self.paused and not self.game_over:
+            assert self.ui is not None
+            self.ui.draw_pause_overlay(screen, self.play_rect)
 
         if self.game_over:
             self.render_game_over_overlay(screen)

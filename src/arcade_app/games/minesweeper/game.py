@@ -1,150 +1,270 @@
 from __future__ import annotations
 
+import random
+from collections import deque
+
 import pygame
 
 from arcade_app.core.game_base import GameBase
-from arcade_app.games.minesweeper.logic import MinesweeperLogic
 from arcade_app.ui import theme
+from arcade_app.ui.game_ui import GameUI
 
 
 class MinesweeperGame(GameBase):
     game_id = "minesweeper"
     title = "Minesweeper"
 
+    ROWS = 12
+    COLS = 16
+    MINES = 28
+    CELL_SIZE = 34
+
+    NUMBER_COLORS = {
+        1: (90, 140, 230),
+        2: (110, 190, 110),
+        3: (230, 90, 90),
+        4: (130, 110, 220),
+        5: (180, 70, 70),
+        6: (70, 170, 170),
+        7: (230, 230, 230),
+        8: (160, 160, 160),
+    }
+
     def __init__(self, app) -> None:
         super().__init__(app)
-        self.logic = MinesweeperLogic()
+        self.ui: GameUI | None = None
+        self.number_font: pygame.font.Font | None = None
 
-        self.title_font: pygame.font.Font | None = None
-        self.info_font: pygame.font.Font | None = None
-        self.cell_font: pygame.font.Font | None = None
+        self.play_rect = pygame.Rect(0, 0, 1080, 640)
+        self.board_rect = pygame.Rect(0, 0, self.COLS * self.CELL_SIZE, self.ROWS * self.CELL_SIZE)
 
-        self.board_rect = pygame.Rect(0, 0, 640, 640)
-        self.cell_rects: list[list[pygame.Rect]] = []
+        self.mine_grid: list[list[bool]] = []
+        self.revealed: list[list[bool]] = []
+        self.flagged: list[list[bool]] = []
+        self.adjacent_counts: list[list[int]] = []
+
+        self.first_click_done = False
+        self.revealed_count = 0
+        self.flags_used = 0
+        self.moves = 0
+
+        self.game_over = False
+        self.won = False
+        self.paused = False
 
     def enter(self) -> None:
-        self.title_font = pygame.font.SysFont("arial", theme.HEADING_SIZE, bold=True)
-        self.info_font = pygame.font.SysFont("arial", theme.BODY_SIZE)
-        self.cell_font = pygame.font.SysFont("arial", 24, bold=True)
+        self.ui = GameUI()
+        self.number_font = pygame.font.SysFont("arial", 24, bold=True)
+        self.reset_game()
 
     def rebuild_layout(self, screen: pygame.Surface) -> None:
-        self.board_rect = pygame.Rect(
-            (screen.get_width() - 640) // 2,
-            150,
-            640,
-            640,
-        )
+        self.play_rect = pygame.Rect((screen.get_width() - 1080) // 2, 165, 1080, 640)
+        self.board_rect = pygame.Rect(0, 0, self.COLS * self.CELL_SIZE, self.ROWS * self.CELL_SIZE)
+        self.board_rect.center = self.play_rect.center
+        self.board_rect.y -= 10
 
-        padding = 6
-        cell_size = (self.board_rect.width - padding * 11) // 10
+    def reset_game(self) -> None:
+        screen = pygame.display.get_surface()
+        if screen is not None:
+            self.rebuild_layout(screen)
 
-        self.cell_rects = []
-        for row in range(10):
-            rect_row = []
-            for col in range(10):
-                x = self.board_rect.x + padding + col * (cell_size + padding)
-                y = self.board_rect.y + padding + row * (cell_size + padding)
-                rect_row.append(pygame.Rect(x, y, cell_size, cell_size))
-            self.cell_rects.append(rect_row)
+        self.mine_grid = [[False for _ in range(self.COLS)] for _ in range(self.ROWS)]
+        self.revealed = [[False for _ in range(self.COLS)] for _ in range(self.ROWS)]
+        self.flagged = [[False for _ in range(self.COLS)] for _ in range(self.ROWS)]
+        self.adjacent_counts = [[0 for _ in range(self.COLS)] for _ in range(self.ROWS)]
 
-    def get_status_text(self) -> str:
-        if self.logic.is_won:
-            return "You cleared the minefield!"
-        if self.logic.is_game_over:
-            return "Boom! You hit a mine."
-        return "Left click: reveal  |  Right click: flag"
+        self.first_click_done = False
+        self.revealed_count = 0
+        self.flags_used = 0
+        self.moves = 0
 
-    def get_number_color(self, value: int) -> tuple[int, int, int]:
-        colors = {
-            1: (100, 170, 255),
-            2: (120, 220, 140),
-            3: (255, 110, 110),
-            4: (180, 130, 255),
-            5: (255, 170, 90),
-            6: (90, 220, 220),
-            7: (230, 230, 230),
-            8: (180, 180, 180),
-        }
-        return colors.get(value, theme.TEXT)
+        self.game_over = False
+        self.won = False
+        self.paused = False
+
+    def get_persistence_payload(self) -> dict:
+        payload = super().get_persistence_payload()
+        payload["hits"] = self.revealed_count
+        payload["round"] = self.flags_used
+        return payload
+
+    def leave_to_menu(self) -> None:
+        from arcade_app.scenes.game_select_scene import GameSelectScene
+        self.app.scene_manager.go_to(GameSelectScene(self.app))
+
+    def neighbors(self, row: int, col: int):
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                nr, nc = row + dr, col + dc
+                if 0 <= nr < self.ROWS and 0 <= nc < self.COLS:
+                    yield nr, nc
+
+    def plant_mines(self, safe_row: int, safe_col: int) -> None:
+        safe_cells = {(safe_row, safe_col), *set(self.neighbors(safe_row, safe_col))}
+        available = [(r, c) for r in range(self.ROWS) for c in range(self.COLS) if (r, c) not in safe_cells]
+        for r, c in random.sample(available, self.MINES):
+            self.mine_grid[r][c] = True
+
+        for r in range(self.ROWS):
+            for c in range(self.COLS):
+                if self.mine_grid[r][c]:
+                    self.adjacent_counts[r][c] = -1
+                else:
+                    self.adjacent_counts[r][c] = sum(1 for nr, nc in self.neighbors(r, c) if self.mine_grid[nr][nc])
+
+    def reveal_cell(self, row: int, col: int) -> None:
+        if self.revealed[row][col] or self.flagged[row][col]:
+            return
+
+        if not self.first_click_done:
+            self.first_click_done = True
+            self.plant_mines(row, col)
+
+        self.moves += 1
+
+        if self.mine_grid[row][col]:
+            self.revealed[row][col] = True
+            self.game_over = True
+            return
+
+        queue = deque([(row, col)])
+        while queue:
+            r, c = queue.popleft()
+            if self.revealed[r][c] or self.flagged[r][c]:
+                continue
+
+            self.revealed[r][c] = True
+            self.revealed_count += 1
+
+            if self.adjacent_counts[r][c] == 0:
+                for nr, nc in self.neighbors(r, c):
+                    if not self.revealed[nr][nc] and not self.mine_grid[nr][nc]:
+                        queue.append((nr, nc))
+
+        if self.revealed_count == self.ROWS * self.COLS - self.MINES:
+            self.won = True
+            self.game_over = True
+
+    def toggle_flag(self, row: int, col: int) -> None:
+        if self.revealed[row][col]:
+            return
+        self.flagged[row][col] = not self.flagged[row][col]
+        self.flags_used += 1 if self.flagged[row][col] else -1
+
+    def grid_cell_at(self, pos: tuple[int, int]) -> tuple[int, int] | None:
+        if not self.board_rect.collidepoint(pos):
+            return None
+        col = (pos[0] - self.board_rect.x) // self.CELL_SIZE
+        row = (pos[1] - self.board_rect.y) // self.CELL_SIZE
+        if 0 <= row < self.ROWS and 0 <= col < self.COLS:
+            return int(row), int(col)
+        return None
 
     def handle_events(self, events: list[pygame.event.Event]) -> None:
         for event in events:
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
-                    from arcade_app.scenes.game_select_scene import GameSelectScene
-                    self.app.scene_manager.go_to(GameSelectScene(self.app))
+                    self.leave_to_menu()
+                elif event.key == pygame.K_p and not self.game_over:
+                    self.paused = not self.paused
                 elif event.key == pygame.K_F5:
-                    self.logic.reset()
+                    self.reset_game()
+                elif self.game_over and event.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER):
+                    self.reset_game()
 
             elif event.type == pygame.MOUSEBUTTONDOWN:
-                mouse_pos = event.pos
+                if self.game_over or self.paused:
+                    if self.game_over and event.button == 1:
+                        self.reset_game()
+                    continue
 
-                for row in range(10):
-                    for col in range(10):
-                        rect = self.cell_rects[row][col]
-                        if rect.collidepoint(mouse_pos):
-                            if event.button == 1:
-                                self.logic.reveal(row, col)
-                            elif event.button == 3:
-                                self.logic.toggle_flag(row, col)
-                            return
+                cell = self.grid_cell_at(event.pos)
+                if cell is None:
+                    continue
+                row, col = cell
+
+                if event.button == 1:
+                    self.reveal_cell(row, col)
+                elif event.button == 3:
+                    self.toggle_flag(row, col)
 
     def update(self, dt: float) -> None:
-        return
+        screen = pygame.display.get_surface()
+        if screen is not None:
+            self.rebuild_layout(screen)
 
     def render(self, screen: pygame.Surface) -> None:
-        assert self.title_font is not None
-        assert self.info_font is not None
-        assert self.cell_font is not None
+        assert self.ui is not None
+        assert self.number_font is not None
 
         self.rebuild_layout(screen)
         screen.fill(theme.BACKGROUND)
 
-        title = self.title_font.render("Minesweeper", True, theme.TEXT)
-        status = self.info_font.render(self.get_status_text(), True, theme.TEXT)
-        flags = self.info_font.render(
-            f"Flags: {self.logic.get_flag_count()} / {self.logic.MINE_COUNT}",
-            True,
-            theme.TEXT,
+        self.ui.draw_header(
+            screen,
+            "Minesweeper",
+            "Left click reveals. Right click flags. Clear every safe cell.",
         )
-        controls = self.info_font.render(
-            "Left click: Reveal  |  Right click: Flag  |  F5: Restart  |  Esc: Back",
-            True,
-            theme.MUTED_TEXT,
+        self.ui.draw_stats_row(
+            screen,
+            [
+                f"Flags: {self.flags_used}/{self.MINES}",
+                f"Revealed: {self.revealed_count}",
+                f"Moves: {self.moves}",
+            ],
         )
 
-        screen.blit(title, title.get_rect(center=(screen.get_width() // 2, 35)))
-        screen.blit(status, status.get_rect(center=(screen.get_width() // 2, 80)))
-        screen.blit(flags, flags.get_rect(center=(screen.get_width() // 2, 115)))
-        screen.blit(controls, controls.get_rect(center=(screen.get_width() // 2, screen.get_height() - 30)))
+        if self.game_over:
+            sub = "Mine triggered." if not self.won else "Board cleared."
+        else:
+            sub = "Use flags carefully and open safe regions efficiently."
+        self.ui.draw_sub_stats(screen, sub)
+        self.ui.draw_footer(screen, "P: Pause  |  F5: Restart  |  Esc: Back")
 
         pygame.draw.rect(screen, theme.SURFACE, self.board_rect, border_radius=theme.RADIUS_MEDIUM)
+        pygame.draw.rect(screen, theme.SURFACE_ALT, self.board_rect, width=2, border_radius=theme.RADIUS_MEDIUM)
 
-        for row in range(10):
-            for col in range(10):
-                rect = self.cell_rects[row][col]
-                revealed = self.logic.revealed[row][col]
-                flagged = self.logic.flagged[row][col]
-                is_mine = (row, col) in self.logic.mines
-                count = self.logic.adjacent_counts[row][col]
+        for r in range(self.ROWS):
+            for c in range(self.COLS):
+                rect = pygame.Rect(
+                    self.board_rect.x + c * self.CELL_SIZE,
+                    self.board_rect.y + r * self.CELL_SIZE,
+                    self.CELL_SIZE,
+                    self.CELL_SIZE,
+                )
 
-                if revealed:
-                    fill = theme.SURFACE_ALT
+                if self.revealed[r][c]:
+                    fill = (74, 78, 90)
                 else:
-                    fill = theme.SURFACE
+                    fill = (92, 96, 108)
 
-                if self.logic.is_game_over and is_mine:
-                    fill = theme.DANGER
+                pygame.draw.rect(screen, fill, rect, border_radius=4)
+                pygame.draw.rect(screen, theme.SURFACE_ALT, rect, width=1, border_radius=4)
 
-                pygame.draw.rect(screen, fill, rect, border_radius=theme.RADIUS_SMALL)
+                if self.revealed[r][c]:
+                    if self.mine_grid[r][c]:
+                        pygame.draw.circle(screen, theme.DANGER, rect.center, 9)
+                    else:
+                        count = self.adjacent_counts[r][c]
+                        if count > 0:
+                            text = self.number_font.render(str(count), True, self.NUMBER_COLORS.get(count, theme.TEXT))
+                            screen.blit(text, text.get_rect(center=rect.center))
+                elif self.flagged[r][c]:
+                    pole = pygame.Rect(rect.centerx - 1, rect.y + 8, 3, 18)
+                    pygame.draw.rect(screen, theme.TEXT, pole)
+                    flag = [(rect.centerx + 1, rect.y + 8), (rect.centerx + 14, rect.y + 14), (rect.centerx + 1, rect.y + 20)]
+                    pygame.draw.polygon(screen, theme.WARNING, flag)
 
-                if flagged and not revealed:
-                    text = self.cell_font.render("F", True, theme.WARNING)
-                    screen.blit(text, text.get_rect(center=rect.center))
-                elif revealed:
-                    if is_mine:
-                        text = self.cell_font.render("*", True, theme.TEXT)
-                        screen.blit(text, text.get_rect(center=rect.center))
-                    elif count > 0:
-                        text = self.cell_font.render(str(count), True, self.get_number_color(count))
-                        screen.blit(text, text.get_rect(center=rect.center))
+        if self.paused and not self.game_over:
+            self.ui.draw_pause_overlay(screen, self.play_rect)
+
+        if self.game_over:
+            self.ui.draw_game_over(
+                screen,
+                self.play_rect,
+                "You Win" if self.won else "Game Over",
+                f"Revealed Cells: {self.revealed_count}",
+                f"Flags Used: {self.flags_used}  |  Moves: {self.moves}",
+            )

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import math
 import random
 
 import pygame
 
 from arcade_app.core.game_base import GameBase
 from arcade_app.ui import theme
+from arcade_app.ui.game_ui import GameUI
 
 
 class TimeAttackChallengeGame(GameBase):
@@ -19,10 +21,7 @@ class TimeAttackChallengeGame(GameBase):
     def __init__(self, app) -> None:
         super().__init__(app)
 
-        self.title_font: pygame.font.Font | None = None
-        self.info_font: pygame.font.Font | None = None
-        self.small_font: pygame.font.Font | None = None
-        self.big_font: pygame.font.Font | None = None
+        self.ui: GameUI | None = None
 
         self.play_rect = pygame.Rect(0, 0, 980, 640)
 
@@ -30,6 +29,7 @@ class TimeAttackChallengeGame(GameBase):
         self.pickups: list[dict] = []
         self.hazards: list[dict] = []
         self.particles: list[dict] = []
+        self.popups: list[dict] = []
 
         self.time_left = self.SESSION_LENGTH
         self.score = 0
@@ -39,6 +39,7 @@ class TimeAttackChallengeGame(GameBase):
         self.best_combo = 0
 
         self.game_over = False
+        self.paused = False
 
         self.pickup_spawn_timer = 0.0
         self.hazard_spawn_timer = 0.0
@@ -46,10 +47,7 @@ class TimeAttackChallengeGame(GameBase):
         self.flash_timer = 0.0
 
     def enter(self) -> None:
-        self.title_font = pygame.font.SysFont("arial", theme.HEADING_SIZE, bold=True)
-        self.info_font = pygame.font.SysFont("arial", theme.BODY_SIZE)
-        self.small_font = pygame.font.SysFont("arial", theme.CAPTION_SIZE)
-        self.big_font = pygame.font.SysFont("arial", 52, bold=True)
+        self.ui = GameUI()
         self.reset_game()
 
     def reset_game(self) -> None:
@@ -62,6 +60,7 @@ class TimeAttackChallengeGame(GameBase):
         self.pickups = []
         self.hazards = []
         self.particles = []
+        self.popups = []
 
         self.time_left = self.SESSION_LENGTH
         self.score = 0
@@ -71,6 +70,7 @@ class TimeAttackChallengeGame(GameBase):
         self.best_combo = 0
 
         self.game_over = False
+        self.paused = False
 
         self.pickup_spawn_timer = 0.0
         self.hazard_spawn_timer = 1.2
@@ -102,6 +102,30 @@ class TimeAttackChallengeGame(GameBase):
         if total == 0:
             return 100.0
         return (self.pickups_collected / total) * 100.0
+
+    def add_popup(self, text: str, pos: tuple[int, int], color: tuple[int, int, int]) -> None:
+        self.popups.append(
+            {
+                "text": text,
+                "pos": pygame.Vector2(pos[0], pos[1]),
+                "vel": pygame.Vector2(0, -44),
+                "life": 0.7,
+                "max_life": 0.7,
+                "color": color,
+                "alpha": 255,
+            }
+        )
+
+    def update_popups(self, dt: float) -> None:
+        updated: list[dict] = []
+        for popup in self.popups:
+            popup["life"] -= dt
+            if popup["life"] <= 0:
+                continue
+            popup["pos"] += popup["vel"] * dt
+            popup["alpha"] = int(255 * (popup["life"] / popup["max_life"]))
+            updated.append(popup)
+        self.popups = updated
 
     def random_arena_position(self, margin: int = 34) -> pygame.Vector2:
         return pygame.Vector2(
@@ -193,9 +217,10 @@ class TimeAttackChallengeGame(GameBase):
                 self.best_combo = max(self.best_combo, self.combo)
                 self.combo_timer = 2.0
 
-                combo_bonus = min(200, self.combo * 14)
-                self.score += pickup["value"] + combo_bonus
+                reward = pickup["value"] + min(200, self.combo * 14)
+                self.score += reward
                 self.add_particles(pickup["pos"], theme.ACCENT, 12)
+                self.add_popup(f"+{reward}", (int(pickup["pos"].x), int(pickup["pos"].y)), theme.ACCENT)
             else:
                 updated_pickups.append(pickup)
 
@@ -221,6 +246,7 @@ class TimeAttackChallengeGame(GameBase):
                 self.score = max(0, self.score - 140)
                 self.flash_timer = 0.18
                 self.add_particles(hazard["pos"], theme.DANGER, 14)
+                self.add_popup("-140", (int(hazard["pos"].x), int(hazard["pos"].y)), theme.DANGER)
 
             still_visible = (
                 self.play_rect.left - 80 <= hazard["pos"].x <= self.play_rect.right + 80
@@ -248,9 +274,13 @@ class TimeAttackChallengeGame(GameBase):
             self.rebuild_layout(screen)
 
         self.update_particles(dt)
+        self.update_popups(dt)
 
         if self.flash_timer > 0:
             self.flash_timer -= dt
+
+        if self.paused:
+            return
 
         if self.game_over:
             return
@@ -286,6 +316,8 @@ class TimeAttackChallengeGame(GameBase):
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     self.leave_to_menu()
+                elif event.key == pygame.K_p and not self.game_over:
+                    self.paused = not self.paused
                 elif event.key == pygame.K_F5:
                     self.reset_game()
                 elif self.game_over and event.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER):
@@ -310,7 +342,7 @@ class TimeAttackChallengeGame(GameBase):
 
     def draw_pickups(self, screen: pygame.Surface) -> None:
         for pickup in self.pickups:
-            pulse_scale = 1.0 + 0.10 * __import__("math").sin(pickup["pulse"])
+            pulse_scale = 1.0 + 0.10 * math.sin(pickup["pulse"])
             radius = int(pickup["radius"] * pulse_scale)
             pygame.draw.circle(screen, theme.ACCENT, (int(pickup["pos"].x), int(pickup["pos"].y)), radius)
             pygame.draw.circle(screen, theme.TEXT, (int(pickup["pos"].x), int(pickup["pos"].y)), max(4, radius // 3))
@@ -337,69 +369,39 @@ class TimeAttackChallengeGame(GameBase):
             )
 
     def render_hud(self, screen: pygame.Surface) -> None:
-        assert self.title_font is not None
-        assert self.info_font is not None
-        assert self.small_font is not None
+        assert self.ui is not None
 
-        title = self.title_font.render("Time Attack Challenge", True, theme.TEXT)
-        subtitle = self.small_font.render(
-            "Move with Arrow Keys or WASD. Grab green pickups, avoid red hazards. F5 restart, Esc back.",
-            True,
-            theme.MUTED_TEXT,
+        self.ui.draw_header(
+            screen,
+            "Time Attack Challenge",
+            "Move with WASD / Arrows. Collect green, avoid red. F5 restart, Esc back.",
         )
-        screen.blit(title, title.get_rect(center=(screen.get_width() // 2, 40)))
-        screen.blit(subtitle, subtitle.get_rect(center=(screen.get_width() // 2, 74)))
-
-        stats = [
-            f"Score: {self.score}",
-            f"Pickups: {self.pickups_collected}",
-            f"Combo: {self.combo}",
-            f"Accuracy: {self.collection_accuracy():0.1f}%",
-            f"Time: {self.time_left:0.1f}s",
-        ]
-        start_x = screen.get_width() // 2 - 360
-        gap = 180
-        for index, stat in enumerate(stats):
-            surface = self.info_font.render(stat, True, theme.TEXT)
-            screen.blit(surface, surface.get_rect(center=(start_x + index * gap, 112)))
-
-        detail = self.small_font.render(
+        self.ui.draw_stats_row(
+            screen,
+            [
+                f"Score: {self.score}",
+                f"Pickups: {self.pickups_collected}",
+                f"Combo: {self.combo}",
+                f"Accuracy: {self.collection_accuracy():0.1f}%",
+                f"Time: {self.time_left:0.1f}s",
+            ],
+        )
+        self.ui.draw_sub_stats(
+            screen,
             f"Hits Taken: {self.hits_taken}  |  Best Combo: {self.best_combo}",
-            True,
-            theme.MUTED_TEXT,
         )
-        screen.blit(detail, detail.get_rect(center=(screen.get_width() // 2, 138)))
+        self.ui.draw_footer(screen, "P: Pause  |  F5: Restart  |  Esc: Back")
 
     def render_game_over_overlay(self, screen: pygame.Surface) -> None:
-        assert self.big_font is not None
-        assert self.info_font is not None
-        assert self.small_font is not None
+        assert self.ui is not None
 
-        panel = pygame.Rect(0, 0, 600, 240)
-        panel.center = self.play_rect.center
-
-        overlay = pygame.Surface((panel.width, panel.height), pygame.SRCALPHA)
-        overlay.fill((8, 10, 16, 220))
-        screen.blit(overlay, panel.topleft)
-        pygame.draw.rect(screen, theme.ACCENT, panel, width=2, border_radius=theme.RADIUS_MEDIUM)
-
-        title = self.big_font.render("Time Up", True, theme.TEXT)
-        score = self.info_font.render(f"Final Score: {self.score}", True, theme.TEXT)
-        summary = self.info_font.render(
+        self.ui.draw_game_over(
+            screen,
+            self.play_rect,
+            "Time Up",
+            f"Final Score: {self.score}",
             f"Pickups: {self.pickups_collected}  |  Accuracy: {self.collection_accuracy():0.1f}%  |  Best Combo: {self.best_combo}",
-            True,
-            theme.TEXT,
         )
-        controls = self.small_font.render(
-            "Press Space / Enter / Click / F5 to restart   |   Esc to go back",
-            True,
-            theme.MUTED_TEXT,
-        )
-
-        screen.blit(title, title.get_rect(center=(panel.centerx, panel.top + 58)))
-        screen.blit(score, score.get_rect(center=(panel.centerx, panel.top + 118)))
-        screen.blit(summary, summary.get_rect(center=(panel.centerx, panel.top + 154)))
-        screen.blit(controls, controls.get_rect(center=(panel.centerx, panel.top + 198)))
 
     def render(self, screen: pygame.Surface) -> None:
         self.rebuild_layout(screen)
@@ -409,6 +411,13 @@ class TimeAttackChallengeGame(GameBase):
         self.draw_player(screen)
         self.draw_particles(screen)
         self.render_hud(screen)
+
+        if self.ui is not None:
+            self.ui.draw_floating_texts(screen, self.popups)
+
+        if self.paused and not self.game_over:
+            assert self.ui is not None
+            self.ui.draw_pause_overlay(screen, self.play_rect)
 
         if self.game_over:
             self.render_game_over_overlay(screen)

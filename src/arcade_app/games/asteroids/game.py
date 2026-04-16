@@ -7,6 +7,7 @@ import pygame
 
 from arcade_app.core.game_base import GameBase
 from arcade_app.ui import theme
+from arcade_app.ui.game_ui import GameUI
 
 
 class AsteroidsGame(GameBase):
@@ -16,132 +17,189 @@ class AsteroidsGame(GameBase):
     def __init__(self, app) -> None:
         super().__init__(app)
 
-        self.title_font: pygame.font.Font | None = None
-        self.info_font: pygame.font.Font | None = None
+        self.ui: GameUI | None = None
 
-        self.play_rect = pygame.Rect(0, 0, 1100, 620)
+        self.play_rect = pygame.Rect(0, 0, 1100, 640)
 
         self.ship_pos = pygame.Vector2(0, 0)
         self.ship_vel = pygame.Vector2(0, 0)
-        self.ship_angle = -90.0
-        self.ship_rotation_speed = 220.0
-        self.ship_acceleration = 260.0
-        self.ship_radius = 18
+        self.ship_angle = 0.0
+
+        self.turn_speed = 210.0
+        self.thrust = 320.0
+        self.friction = 0.992
 
         self.bullets: list[dict] = []
         self.asteroids: list[dict] = []
-
-        self.shoot_cooldown = 0.0
-        self.shoot_delay = 0.22
+        self.popups: list[dict] = []
 
         self.score = 0
         self.lives = 3
         self.wave = 1
-        self.is_game_over = False
-        self.is_won = False
+
+        self.game_over = False
+        self.paused = False
+        self.invuln_timer = 0.0
+        self.shoot_cooldown = 0.0
 
     def enter(self) -> None:
-        self.title_font = pygame.font.SysFont("arial", theme.HEADING_SIZE, bold=True)
-        self.info_font = pygame.font.SysFont("arial", theme.BODY_SIZE)
-
-        screen = pygame.display.get_surface()
-        if screen is not None:
-            self.rebuild_layout(screen)
-
+        self.ui = GameUI()
         self.reset_game()
 
     def rebuild_layout(self, screen: pygame.Surface) -> None:
         self.play_rect = pygame.Rect(
             (screen.get_width() - 1100) // 2,
-            140,
+            165,
             1100,
-            620,
+            640,
         )
 
     def reset_ship(self) -> None:
         self.ship_pos = pygame.Vector2(self.play_rect.centerx, self.play_rect.centery)
         self.ship_vel = pygame.Vector2(0, 0)
         self.ship_angle = -90.0
-
-    def spawn_wave(self) -> None:
-        self.asteroids.clear()
-        asteroid_count = 4 + self.wave
-
-        for _ in range(asteroid_count):
-            while True:
-                x = random.uniform(self.play_rect.left + 20, self.play_rect.right - 20)
-                y = random.uniform(self.play_rect.top + 20, self.play_rect.bottom - 20)
-                if pygame.Vector2(x, y).distance_to(self.ship_pos) > 150:
-                    break
-
-            angle = random.uniform(0, 360)
-            speed = random.uniform(50 + self.wave * 5, 100 + self.wave * 8)
-            velocity = pygame.Vector2(1, 0).rotate(angle) * speed
-
-            radius = random.randint(24, 42)
-
-            self.asteroids.append(
-                {
-                    "pos": pygame.Vector2(x, y),
-                    "vel": velocity,
-                    "radius": radius,
-                }
-            )
+        self.invuln_timer = 2.0
 
     def reset_game(self) -> None:
+        screen = pygame.display.get_surface()
+        if screen is not None:
+            self.rebuild_layout(screen)
+
         self.score = 0
         self.lives = 3
         self.wave = 1
-        self.is_game_over = False
-        self.is_won = False
+        self.game_over = False
+        self.paused = False
         self.bullets.clear()
+        self.asteroids.clear()
+        self.popups.clear()
         self.shoot_cooldown = 0.0
-
         self.reset_ship()
         self.spawn_wave()
 
-    def wrap_position(self, pos: pygame.Vector2, radius: float) -> None:
-        if pos.x < self.play_rect.left - radius:
-            pos.x = self.play_rect.right + radius
-        elif pos.x > self.play_rect.right + radius:
-            pos.x = self.play_rect.left - radius
+    def spawn_wave(self) -> None:
+        self.asteroids.clear()
+        count = 3 + self.wave
 
-        if pos.y < self.play_rect.top - radius:
-            pos.y = self.play_rect.bottom + radius
-        elif pos.y > self.play_rect.bottom + radius:
-            pos.y = self.play_rect.top - radius
+        for _ in range(count):
+            while True:
+                pos = pygame.Vector2(
+                    random.randint(self.play_rect.left, self.play_rect.right),
+                    random.randint(self.play_rect.top, self.play_rect.bottom),
+                )
+                if pos.distance_to(self.ship_pos) > 180:
+                    break
 
-    def fire_bullet(self) -> None:
-        direction = pygame.Vector2(1, 0).rotate(self.ship_angle)
-        bullet_vel = direction * 460 + self.ship_vel
+            angle = random.uniform(0, math.tau)
+            speed = random.uniform(40, 95) + self.wave * 6
 
-        self.bullets.append(
-            {
-                "pos": self.ship_pos.copy(),
-                "vel": bullet_vel,
-                "life": 1.2,
-                "radius": 4,
-            }
-        )
-
-    def break_asteroid(self, asteroid: dict) -> None:
-        radius = asteroid["radius"]
-
-        if radius <= 18:
-            return
-
-        for _ in range(2):
-            angle = random.uniform(0, 360)
-            speed = random.uniform(80, 140)
-            velocity = pygame.Vector2(1, 0).rotate(angle) * speed
+            size = random.choice([54, 72, 96])
 
             self.asteroids.append(
                 {
-                    "pos": asteroid["pos"].copy(),
-                    "vel": velocity,
-                    "radius": max(14, radius // 2),
+                    "pos": pos,
+                    "vel": pygame.Vector2(math.cos(angle) * speed, math.sin(angle) * speed),
+                    "radius": size // 2,
+                    "size": size,
                 }
             )
+
+    def add_popup(self, text: str, pos: pygame.Vector2, color: tuple[int, int, int]) -> None:
+        self.popups.append(
+            {
+                "text": text,
+                "pos": pygame.Vector2(pos.x, pos.y),
+                "vel": pygame.Vector2(0, -36),
+                "life": 0.6,
+                "max_life": 0.6,
+                "color": color,
+                "alpha": 255,
+            }
+        )
+
+    def update_popups(self, dt: float) -> None:
+        updated: list[dict] = []
+        for popup in self.popups:
+            popup["life"] -= dt
+            if popup["life"] <= 0:
+                continue
+            popup["pos"] += popup["vel"] * dt
+            popup["alpha"] = int(255 * (popup["life"] / popup["max_life"]))
+            updated.append(popup)
+        self.popups = updated
+
+    def wrap_position(self, pos: pygame.Vector2) -> None:
+        if pos.x < self.play_rect.left:
+            pos.x = self.play_rect.right
+        elif pos.x > self.play_rect.right:
+            pos.x = self.play_rect.left
+
+        if pos.y < self.play_rect.top:
+            pos.y = self.play_rect.bottom
+        elif pos.y > self.play_rect.bottom:
+            pos.y = self.play_rect.top
+
+    def ship_points(self) -> list[tuple[int, int]]:
+        angle_rad = math.radians(self.ship_angle)
+        forward = pygame.Vector2(math.cos(angle_rad), math.sin(angle_rad))
+        right = forward.rotate(90)
+
+        nose = self.ship_pos + forward * 20
+        left = self.ship_pos - forward * 14 + right * 12
+        right_pt = self.ship_pos - forward * 14 - right * 12
+
+        return [(int(nose.x), int(nose.y)), (int(left.x), int(left.y)), (int(right_pt.x), int(right_pt.y))]
+
+    def fire_bullet(self) -> None:
+        if self.shoot_cooldown > 0 or self.game_over or self.paused:
+            return
+
+        angle_rad = math.radians(self.ship_angle)
+        direction = pygame.Vector2(math.cos(angle_rad), math.sin(angle_rad))
+        bullet_pos = self.ship_pos + direction * 24
+        bullet_vel = direction * 560 + self.ship_vel
+
+        self.bullets.append(
+            {
+                "pos": bullet_pos,
+                "vel": bullet_vel,
+                "life": 1.4,
+            }
+        )
+        self.shoot_cooldown = 0.18
+
+    def split_asteroid(self, asteroid: dict) -> None:
+        size = asteroid["size"]
+        reward = 30 if size >= 96 else 60 if size >= 72 else 100
+        self.score += reward
+        self.add_popup(f"+{reward}", asteroid["pos"], theme.ACCENT)
+
+        if size <= 54:
+            return
+
+        new_size = 72 if size >= 96 else 54
+        for direction in (-1, 1):
+            angle = random.uniform(0, math.tau) + direction * 0.6
+            speed = random.uniform(90, 150)
+            self.asteroids.append(
+                {
+                    "pos": pygame.Vector2(asteroid["pos"].x, asteroid["pos"].y),
+                    "vel": pygame.Vector2(math.cos(angle) * speed, math.sin(angle) * speed),
+                    "radius": new_size // 2,
+                    "size": new_size,
+                }
+            )
+
+    def ship_hit(self) -> None:
+        if self.invuln_timer > 0:
+            return
+
+        self.lives -= 1
+        if self.lives <= 0:
+            self.game_over = True
+            return
+
+        self.reset_ship()
 
     def handle_events(self, events: list[pygame.event.Event]) -> None:
         for event in events:
@@ -149,156 +207,158 @@ class AsteroidsGame(GameBase):
                 if event.key == pygame.K_ESCAPE:
                     from arcade_app.scenes.game_select_scene import GameSelectScene
                     self.app.scene_manager.go_to(GameSelectScene(self.app))
+                elif event.key == pygame.K_p and not self.game_over:
+                    self.paused = not self.paused
                 elif event.key == pygame.K_F5:
                     self.reset_game()
                 elif event.key == pygame.K_SPACE:
-                    if not self.is_game_over and not self.is_won and self.shoot_cooldown <= 0:
+                    if self.game_over:
+                        self.reset_game()
+                    else:
                         self.fire_bullet()
-                        self.shoot_cooldown = self.shoot_delay
 
-    def update_ship(self, dt: float) -> None:
-        keys = pygame.key.get_pressed()
-
-        if keys[pygame.K_LEFT] or keys[pygame.K_a]:
-            self.ship_angle -= self.ship_rotation_speed * dt
-        if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
-            self.ship_angle += self.ship_rotation_speed * dt
-
-        if keys[pygame.K_UP] or keys[pygame.K_w]:
-            thrust = pygame.Vector2(1, 0).rotate(self.ship_angle) * self.ship_acceleration * dt
-            self.ship_vel += thrust
-
-        self.ship_vel *= 0.992
-        self.ship_pos += self.ship_vel * dt
-        self.wrap_position(self.ship_pos, self.ship_radius)
-
-    def update_bullets(self, dt: float) -> None:
-        for bullet in self.bullets[:]:
-            bullet["pos"] += bullet["vel"] * dt
-            bullet["life"] -= dt
-            self.wrap_position(bullet["pos"], bullet["radius"])
-
-            if bullet["life"] <= 0:
-                self.bullets.remove(bullet)
-
-    def update_asteroids(self, dt: float) -> None:
-        for asteroid in self.asteroids:
-            asteroid["pos"] += asteroid["vel"] * dt
-            self.wrap_position(asteroid["pos"], asteroid["radius"])
-
-    def check_collisions(self) -> None:
-        for bullet in self.bullets[:]:
-            bullet_pos = bullet["pos"]
-
-            hit_asteroid = None
-            for asteroid in self.asteroids:
-                if bullet_pos.distance_to(asteroid["pos"]) <= bullet["radius"] + asteroid["radius"]:
-                    hit_asteroid = asteroid
-                    break
-
-            if hit_asteroid is not None:
-                if bullet in self.bullets:
-                    self.bullets.remove(bullet)
-                if hit_asteroid in self.asteroids:
-                    self.asteroids.remove(hit_asteroid)
-                    self.break_asteroid(hit_asteroid)
-                    self.score += 100
-
-        for asteroid in self.asteroids:
-            if self.ship_pos.distance_to(asteroid["pos"]) <= self.ship_radius + asteroid["radius"]:
-                self.lives -= 1
-
-                if self.lives <= 0:
-                    self.is_game_over = True
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if self.game_over:
+                    self.reset_game()
                 else:
-                    self.reset_ship()
-                    self.bullets.clear()
-                return
+                    self.fire_bullet()
 
     def update(self, dt: float) -> None:
         screen = pygame.display.get_surface()
         if screen is not None:
             self.rebuild_layout(screen)
 
-        if self.shoot_cooldown > 0:
-            self.shoot_cooldown -= dt
+        self.update_popups(dt)
 
-        if self.is_game_over or self.is_won:
+        if self.paused:
             return
 
-        self.update_ship(dt)
-        self.update_bullets(dt)
-        self.update_asteroids(dt)
-        self.check_collisions()
+        if self.game_over:
+            return
 
-        if not self.asteroids:
+        if self.shoot_cooldown > 0:
+            self.shoot_cooldown -= dt
+        if self.invuln_timer > 0:
+            self.invuln_timer -= dt
+
+        keys = pygame.key.get_pressed()
+        if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+            self.ship_angle -= self.turn_speed * dt
+        if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+            self.ship_angle += self.turn_speed * dt
+        if keys[pygame.K_UP] or keys[pygame.K_w]:
+            angle_rad = math.radians(self.ship_angle)
+            direction = pygame.Vector2(math.cos(angle_rad), math.sin(angle_rad))
+            self.ship_vel += direction * self.thrust * dt
+
+        self.ship_pos += self.ship_vel * dt
+        self.ship_vel *= self.friction
+        self.wrap_position(self.ship_pos)
+
+        for bullet in self.bullets:
+            bullet["pos"] += bullet["vel"] * dt
+            bullet["life"] -= dt
+            self.wrap_position(bullet["pos"])
+
+        self.bullets = [b for b in self.bullets if b["life"] > 0]
+
+        for asteroid in self.asteroids:
+            asteroid["pos"] += asteroid["vel"] * dt
+            self.wrap_position(asteroid["pos"])
+
+        remaining_bullets: list[dict] = []
+        destroyed_indices: set[int] = set()
+        asteroids_to_split: list[dict] = []
+
+        for bullet in self.bullets:
+            hit = False
+            for index, asteroid in enumerate(self.asteroids):
+                if index in destroyed_indices:
+                    continue
+                if bullet["pos"].distance_to(asteroid["pos"]) <= asteroid["radius"]:
+                    destroyed_indices.add(index)
+                    asteroids_to_split.append(asteroid)
+                    hit = True
+                    break
+            if not hit:
+                remaining_bullets.append(bullet)
+
+        if destroyed_indices:
+            self.asteroids = [a for i, a in enumerate(self.asteroids) if i not in destroyed_indices]
+            for asteroid in asteroids_to_split:
+                self.split_asteroid(asteroid)
+
+        self.bullets = remaining_bullets
+
+        if self.invuln_timer <= 0:
+            for asteroid in self.asteroids:
+                if self.ship_pos.distance_to(asteroid["pos"]) <= asteroid["radius"] + 14:
+                    self.ship_hit()
+                    break
+
+        if not self.asteroids and not self.game_over:
             self.wave += 1
-            if self.wave > 5:
-                self.is_won = True
-            else:
-                self.spawn_wave()
+            self.spawn_wave()
 
-    def ship_points(self) -> list[tuple[int, int]]:
-        forward = pygame.Vector2(1, 0).rotate(self.ship_angle) * self.ship_radius
-        left = pygame.Vector2(1, 0).rotate(self.ship_angle + 140) * (self.ship_radius * 0.8)
-        right = pygame.Vector2(1, 0).rotate(self.ship_angle - 140) * (self.ship_radius * 0.8)
+    def draw_ship(self, screen: pygame.Surface) -> None:
+        points = self.ship_points()
+        color = theme.TEXT if self.invuln_timer <= 0 or int(self.invuln_timer * 10) % 2 == 0 else theme.SURFACE_ALT
+        pygame.draw.polygon(screen, color, points, width=2)
 
-        p1 = self.ship_pos + forward
-        p2 = self.ship_pos + left
-        p3 = self.ship_pos + right
-
-        return [(int(p1.x), int(p1.y)), (int(p2.x), int(p2.y)), (int(p3.x), int(p3.y))]
+    def draw_asteroid(self, screen: pygame.Surface, asteroid: dict) -> None:
+        pos = asteroid["pos"]
+        radius = asteroid["radius"]
+        points = []
+        for i in range(9):
+            angle = (math.tau / 9) * i
+            offset = random.uniform(0.78, 1.15)
+            x = pos.x + math.cos(angle) * radius * offset
+            y = pos.y + math.sin(angle) * radius * offset
+            points.append((int(x), int(y)))
+        pygame.draw.polygon(screen, theme.MUTED_TEXT, points, width=2)
 
     def render(self, screen: pygame.Surface) -> None:
-        assert self.title_font is not None
-        assert self.info_font is not None
+        assert self.ui is not None
 
         self.rebuild_layout(screen)
         screen.fill(theme.BACKGROUND)
 
-        title = self.title_font.render("Asteroids", True, theme.TEXT)
-
-        if self.is_won:
-            status_text = "You survived the asteroid field!"
-        elif self.is_game_over:
-            status_text = "Game Over"
-        else:
-            status_text = "Destroy the asteroids"
-
-        status = self.info_font.render(status_text, True, theme.TEXT)
-        score = self.info_font.render(f"Score: {self.score}", True, theme.TEXT)
-        lives = self.info_font.render(f"Lives: {self.lives}", True, theme.TEXT)
-        wave = self.info_font.render(f"Wave: {self.wave}", True, theme.TEXT)
-        controls = self.info_font.render(
-            "Rotate: Left/Right or A,D  |  Thrust: Up/W  |  Space: Shoot  |  F5: Restart  |  Esc: Back",
-            True,
-            theme.MUTED_TEXT,
+        self.ui.draw_header(
+            screen,
+            "Asteroids",
+            "Turn with A/D or Left/Right, thrust with W/Up, shoot with Space or Click.",
         )
-
-        screen.blit(title, title.get_rect(center=(screen.get_width() // 2, 32)))
-        screen.blit(status, status.get_rect(center=(screen.get_width() // 2, 75)))
-        screen.blit(score, score.get_rect(center=(screen.get_width() // 2 - 180, 110)))
-        screen.blit(lives, lives.get_rect(center=(screen.get_width() // 2, 110)))
-        screen.blit(wave, wave.get_rect(center=(screen.get_width() // 2 + 180, 110)))
-        screen.blit(controls, controls.get_rect(center=(screen.get_width() // 2, screen.get_height() - 28)))
+        self.ui.draw_stats_row(
+            screen,
+            [
+                f"Score: {self.score}",
+                f"Lives: {self.lives}",
+                f"Wave: {self.wave}",
+            ],
+        )
+        self.ui.draw_sub_stats(screen, "Split large rocks, control your drift, and clear each wave.")
+        self.ui.draw_footer(screen, "P: Pause  |  F5: Restart  |  Esc: Back")
 
         pygame.draw.rect(screen, theme.SURFACE, self.play_rect, border_radius=theme.RADIUS_MEDIUM)
+        pygame.draw.rect(screen, theme.SURFACE_ALT, self.play_rect, width=2, border_radius=theme.RADIUS_MEDIUM)
 
         for asteroid in self.asteroids:
-            pygame.draw.circle(
-                screen,
-                theme.SURFACE_ALT,
-                (int(asteroid["pos"].x), int(asteroid["pos"].y)),
-                asteroid["radius"],
-                width=3,
-            )
+            self.draw_asteroid(screen, asteroid)
 
         for bullet in self.bullets:
-            pygame.draw.circle(
-                screen,
-                theme.ACCENT,
-                (int(bullet["pos"].x), int(bullet["pos"].y)),
-                bullet["radius"],
-            )
+            pygame.draw.circle(screen, theme.ACCENT, (int(bullet["pos"].x), int(bullet["pos"].y)), 3)
 
-        pygame.draw.polygon(screen, theme.TEXT, self.ship_points(), width=3)
+        self.draw_ship(screen)
+        self.ui.draw_floating_texts(screen, self.popups)
+
+        if self.paused and not self.game_over:
+            self.ui.draw_pause_overlay(screen, self.play_rect)
+
+        if self.game_over:
+            self.ui.draw_game_over(
+                screen,
+                self.play_rect,
+                "Game Over",
+                f"Final Score: {self.score}",
+                f"Final Wave: {self.wave}",
+            )

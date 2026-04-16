@@ -6,6 +6,7 @@ import pygame
 
 from arcade_app.core.game_base import GameBase
 from arcade_app.ui import theme
+from arcade_app.ui.game_ui import GameUI
 
 
 class ReactionTimerGame(GameBase):
@@ -24,10 +25,7 @@ class ReactionTimerGame(GameBase):
     def __init__(self, app) -> None:
         super().__init__(app)
 
-        self.title_font: pygame.font.Font | None = None
-        self.info_font: pygame.font.Font | None = None
-        self.small_font: pygame.font.Font | None = None
-        self.big_font: pygame.font.Font | None = None
+        self.ui: GameUI | None = None
 
         self.play_rect = pygame.Rect(0, 0, 960, 620)
 
@@ -43,12 +41,10 @@ class ReactionTimerGame(GameBase):
         self.results: list[int] = []
 
         self.pulse_timer = 0.0
+        self.paused = False
 
     def enter(self) -> None:
-        self.title_font = pygame.font.SysFont("arial", theme.HEADING_SIZE, bold=True)
-        self.info_font = pygame.font.SysFont("arial", theme.BODY_SIZE)
-        self.small_font = pygame.font.SysFont("arial", theme.CAPTION_SIZE)
-        self.big_font = pygame.font.SysFont("arial", 54, bold=True)
+        self.ui = GameUI()
         self.reset_game()
 
     def reset_game(self) -> None:
@@ -68,6 +64,7 @@ class ReactionTimerGame(GameBase):
         self.results = []
 
         self.pulse_timer = 0.0
+        self.paused = False
 
     def rebuild_layout(self, screen: pygame.Surface) -> None:
         self.play_rect = pygame.Rect(0, 0, 960, 620)
@@ -114,6 +111,9 @@ class ReactionTimerGame(GameBase):
         return payload
 
     def react_now(self) -> None:
+        if self.paused:
+            return
+
         if self.state == self.STATE_IDLE:
             self.start_round()
             return
@@ -154,6 +154,8 @@ class ReactionTimerGame(GameBase):
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     self.leave_to_menu()
+                elif event.key == pygame.K_p and self.state != self.STATE_SESSION_COMPLETE:
+                    self.paused = not self.paused
                 elif event.key == pygame.K_F5:
                     self.reset_game()
                 elif event.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER):
@@ -166,6 +168,9 @@ class ReactionTimerGame(GameBase):
         screen = pygame.display.get_surface()
         if screen is not None:
             self.rebuild_layout(screen)
+
+        if self.paused:
+            return
 
         self.pulse_timer += dt
 
@@ -242,36 +247,35 @@ class ReactionTimerGame(GameBase):
             )
 
     def render_hud(self, screen: pygame.Surface) -> None:
-        assert self.title_font is not None
-        assert self.info_font is not None
-        assert self.small_font is not None
-        assert self.big_font is not None
+        assert self.ui is not None
+        assert self.ui.big_font is not None
+        assert self.ui.info_font is not None
+        assert self.ui.small_font is not None
 
-        title = self.title_font.render("Reaction Timer", True, theme.TEXT)
-        subtitle = self.small_font.render(
+        self.ui.draw_header(
+            screen,
+            "Reaction Timer",
             "Press Space / Enter / Click to react. F5 restart, Esc back.",
-            True,
-            theme.MUTED_TEXT,
         )
-        screen.blit(title, title.get_rect(center=(screen.get_width() // 2, 40)))
-        screen.blit(subtitle, subtitle.get_rect(center=(screen.get_width() // 2, 74)))
-
-        stats = [
-            f"Round: {min(self.round_index + (1 if self.state in (self.STATE_WAITING, self.STATE_READY) else 0), self.TOTAL_ROUNDS)}/{self.TOTAL_ROUNDS}",
-            f"Best: {self.best_reaction_ms()} ms" if self.results else "Best: --",
-            f"Average: {self.average_reaction_ms()} ms" if self.results else "Average: --",
-            f"False Starts: {self.false_starts}",
-        ]
-        start_x = screen.get_width() // 2 - 320
-        gap = 210
-        for index, stat in enumerate(stats):
-            surface = self.info_font.render(stat, True, theme.TEXT)
-            screen.blit(surface, surface.get_rect(center=(start_x + index * gap, 112)))
+        self.ui.draw_stats_row(
+            screen,
+            [
+                f"Round: {min(self.round_index + (1 if self.state in (self.STATE_WAITING, self.STATE_READY) else 0), self.TOTAL_ROUNDS)}/{self.TOTAL_ROUNDS}",
+                f"Best: {self.best_reaction_ms()} ms" if self.results else "Best: --",
+                f"Average: {self.average_reaction_ms()} ms" if self.results else "Average: --",
+                f"False Starts: {self.false_starts}",
+            ],
+        )
+        self.ui.draw_sub_stats(
+            screen,
+            "Wait for green, react instantly, and avoid false starts.",
+        )
+        self.ui.draw_footer(screen, "P: Pause  |  F5: Restart  |  Esc: Back")
 
         heading, subheading = self.status_title_and_subtitle()
 
-        heading_surface = self.big_font.render(heading, True, theme.TEXT)
-        subheading_surface = self.info_font.render(subheading, True, theme.TEXT)
+        heading_surface = self.ui.big_font.render(heading, True, theme.TEXT)
+        subheading_surface = self.ui.info_font.render(subheading, True, theme.TEXT)
 
         center_y = self.play_rect.centery + 40
         screen.blit(heading_surface, heading_surface.get_rect(center=(self.play_rect.centerx, center_y - 30)))
@@ -284,8 +288,19 @@ class ReactionTimerGame(GameBase):
                 f"Successful Rounds: {len(self.results)}/{self.TOTAL_ROUNDS}",
             ]
             for i, line in enumerate(summary):
-                summary_surface = self.small_font.render(line, True, theme.MUTED_TEXT)
+                summary_surface = self.ui.small_font.render(line, True, theme.MUTED_TEXT)
                 screen.blit(summary_surface, summary_surface.get_rect(center=(self.play_rect.centerx, center_y + 84 + i * 28)))
+
+    def render_game_over_overlay(self, screen: pygame.Surface) -> None:
+        assert self.ui is not None
+
+        self.ui.draw_game_over(
+            screen,
+            self.play_rect,
+            "Session Complete",
+            f"Best Reaction: {self.best_reaction_ms()} ms",
+            f"Average: {self.average_reaction_ms()} ms  |  False Starts: {self.false_starts}",
+        )
 
     def render(self, screen: pygame.Surface) -> None:
         self.rebuild_layout(screen)
@@ -296,3 +311,10 @@ class ReactionTimerGame(GameBase):
 
         self.draw_signal_panel(screen)
         self.render_hud(screen)
+
+        if self.paused and self.state != self.STATE_SESSION_COMPLETE:
+            assert self.ui is not None
+            self.ui.draw_pause_overlay(screen, self.play_rect)
+
+        if self.state == self.STATE_SESSION_COMPLETE:
+            self.render_game_over_overlay(screen)

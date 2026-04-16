@@ -6,17 +6,19 @@ import pygame
 
 from arcade_app.core.game_base import GameBase
 from arcade_app.ui import theme
+from arcade_app.ui.game_ui import GameUI
 
 
 class PongGame(GameBase):
     game_id = "pong"
     title = "Pong"
 
+    WIN_SCORE = 7
+
     def __init__(self, app) -> None:
         super().__init__(app)
 
-        self.title_font: pygame.font.Font | None = None
-        self.info_font: pygame.font.Font | None = None
+        self.ui: GameUI | None = None
         self.score_font: pygame.font.Font | None = None
         self.mode_font: pygame.font.Font | None = None
 
@@ -33,9 +35,13 @@ class PongGame(GameBase):
         self.right_score = 0
 
         self.vs_computer = True
+        self.paused = False
+        self.game_over = False
+        self.winner_text = ""
 
         self.left_paddle = pygame.Rect(0, 0, self.paddle_width, self.paddle_height)
         self.right_paddle = pygame.Rect(0, 0, self.paddle_width, self.paddle_height)
+        self.ball_pos = pygame.Vector2(0, 0)
         self.ball = pygame.Rect(0, 0, self.ball_size, self.ball_size)
 
         self.ball_velocity_x = 0.0
@@ -45,13 +51,10 @@ class PongGame(GameBase):
         self.pvc_button = pygame.Rect(0, 0, 180, 44)
 
     def enter(self) -> None:
-        self.title_font = pygame.font.SysFont("arial", theme.HEADING_SIZE, bold=True)
-        self.info_font = pygame.font.SysFont("arial", theme.BODY_SIZE)
+        self.ui = GameUI()
         self.score_font = pygame.font.SysFont("arial", 48, bold=True)
         self.mode_font = pygame.font.SysFont("arial", theme.CAPTION_SIZE, bold=True)
-
-        self.reset_positions()
-        self.serve_ball(random.choice([-1, 1]))
+        self.reset_game()
 
     def rebuild_layout(self, screen: pygame.Surface) -> None:
         board_width = 1100
@@ -65,8 +68,8 @@ class PongGame(GameBase):
             board_height,
         )
 
-        self.pvp_button = pygame.Rect(screen.get_width() // 2 - 210, 115, 180, 44)
-        self.pvc_button = pygame.Rect(screen.get_width() // 2 + 30, 115, 180, 44)
+        self.pvp_button = pygame.Rect(screen.get_width() // 2 - 210, 150, 180, 40)
+        self.pvc_button = pygame.Rect(screen.get_width() // 2 + 30, 150, 180, 40)
 
         self.left_paddle.width = self.paddle_width
         self.left_paddle.height = self.paddle_height
@@ -86,7 +89,7 @@ class PongGame(GameBase):
         if self.right_paddle.bottom > self.play_rect.bottom:
             self.right_paddle.bottom = self.play_rect.bottom
 
-        self.ball.clamp_ip(self.play_rect)
+        self.ball.topleft = (round(self.ball_pos.x), round(self.ball_pos.y))
 
     def reset_positions(self) -> None:
         self.left_paddle = pygame.Rect(
@@ -107,16 +110,26 @@ class PongGame(GameBase):
             self.ball_size,
             self.ball_size,
         )
+        self.ball_pos = pygame.Vector2(self.ball.x, self.ball.y)
 
     def serve_ball(self, direction: int) -> None:
         self.ball.center = self.play_rect.center
+        self.ball_pos = pygame.Vector2(self.ball.x, self.ball.y)
+
         angle_y = random.uniform(-0.8, 0.8)
         self.ball_velocity_x = self.ball_speed * direction
         self.ball_velocity_y = self.ball_speed * angle_y
 
     def reset_game(self) -> None:
+        screen = pygame.display.get_surface()
+        if screen is not None:
+            self.rebuild_layout(screen)
+
         self.left_score = 0
         self.right_score = 0
+        self.paused = False
+        self.game_over = False
+        self.winner_text = ""
         self.reset_positions()
         self.serve_ball(random.choice([-1, 1]))
 
@@ -149,37 +162,57 @@ class PongGame(GameBase):
         if paddle.bottom > self.play_rect.bottom:
             paddle.bottom = self.play_rect.bottom
 
+    def check_win_condition(self) -> None:
+        if self.left_score >= self.WIN_SCORE:
+            self.game_over = True
+            self.winner_text = "Left Player Wins"
+        elif self.right_score >= self.WIN_SCORE:
+            self.game_over = True
+            self.winner_text = "Right Player Wins"
+
     def update_ball(self, dt: float) -> None:
-        self.ball.x += int(self.ball_velocity_x * dt)
-        self.ball.y += int(self.ball_velocity_y * dt)
+        self.ball_pos.x += self.ball_velocity_x * dt
+        self.ball_pos.y += self.ball_velocity_y * dt
+        self.ball.x = round(self.ball_pos.x)
+        self.ball.y = round(self.ball_pos.y)
 
         if self.ball.top <= self.play_rect.top:
             self.ball.top = self.play_rect.top
+            self.ball_pos.y = float(self.ball.y)
             self.ball_velocity_y *= -1
 
         if self.ball.bottom >= self.play_rect.bottom:
             self.ball.bottom = self.play_rect.bottom
+            self.ball_pos.y = float(self.ball.y)
             self.ball_velocity_y *= -1
 
         if self.ball.colliderect(self.left_paddle) and self.ball_velocity_x < 0:
             self.ball.left = self.left_paddle.right
+            self.ball_pos.x = float(self.ball.x)
             self.ball_velocity_x *= -1
             self.add_paddle_bounce(self.left_paddle)
 
         if self.ball.colliderect(self.right_paddle) and self.ball_velocity_x > 0:
             self.ball.right = self.right_paddle.left
+            self.ball_pos.x = float(self.ball.x)
             self.ball_velocity_x *= -1
             self.add_paddle_bounce(self.right_paddle)
 
         if self.ball.right < self.play_rect.left:
             self.right_score += 1
-            self.reset_positions()
-            self.serve_ball(-1)
+            self.check_win_condition()
+            if not self.game_over:
+                self.reset_positions()
+                self.serve_ball(-1)
+            return
 
         if self.ball.left > self.play_rect.right:
             self.left_score += 1
-            self.reset_positions()
-            self.serve_ball(1)
+            self.check_win_condition()
+            if not self.game_over:
+                self.reset_positions()
+                self.serve_ball(1)
+            return
 
     def add_paddle_bounce(self, paddle: pygame.Rect) -> None:
         relative_intersect = self.ball.centery - paddle.centery
@@ -204,12 +237,16 @@ class PongGame(GameBase):
                 if event.key == pygame.K_ESCAPE:
                     from arcade_app.scenes.game_select_scene import GameSelectScene
                     self.app.scene_manager.go_to(GameSelectScene(self.app))
-                elif event.key == pygame.K_r:
+                elif event.key == pygame.K_p and not self.game_over:
+                    self.paused = not self.paused
+                elif event.key == pygame.K_F5:
                     self.reset_game()
                 elif event.key == pygame.K_1:
                     self.set_mode(False)
                 elif event.key == pygame.K_2:
                     self.set_mode(True)
+                elif event.key in (pygame.K_SPACE, pygame.K_RETURN) and self.game_over:
+                    self.reset_game()
 
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 mouse_pos = event.pos
@@ -222,7 +259,17 @@ class PongGame(GameBase):
                     self.set_mode(True)
                     return
 
+                if self.game_over:
+                    self.reset_game()
+
     def update(self, dt: float) -> None:
+        screen = pygame.display.get_surface()
+        if screen is not None:
+            self.rebuild_layout(screen)
+
+        if self.paused or self.game_over:
+            return
+
         keys = pygame.key.get_pressed()
 
         left_direction = 0.0
@@ -245,36 +292,35 @@ class PongGame(GameBase):
         self.update_ball(dt)
 
     def render(self, screen: pygame.Surface) -> None:
-        assert self.title_font is not None
-        assert self.info_font is not None
+        assert self.ui is not None
         assert self.score_font is not None
         assert self.mode_font is not None
 
         self.rebuild_layout(screen)
         screen.fill(theme.BACKGROUND)
 
-        title = self.title_font.render("Pong", True, theme.TEXT)
-        score_text = self.score_font.render(f"{self.left_score}     {self.right_score}", True, theme.TEXT)
-
-        mode_text = "Mode: Player vs Computer" if self.vs_computer else "Mode: Player vs Player"
-        mode_render = self.info_font.render(mode_text, True, theme.TEXT)
-
-        controls = self.info_font.render(
-            "Left: W/S  |  Right: ↑/↓ (PvP)  |  1: PvP  |  2: PvC  |  R: Restart  |  Esc: Back",
-            True,
-            theme.MUTED_TEXT,
+        mode_text = "Player vs Computer" if self.vs_computer else "Player vs Player"
+        self.ui.draw_header(
+            screen,
+            "Pong",
+            "Left paddle: W/S. Right paddle: Arrow Keys in PvP. 1 = PvP, 2 = PvC.",
         )
-
-        screen.blit(title, title.get_rect(center=(screen.get_width() // 2, 28)))
-        screen.blit(score_text, score_text.get_rect(center=(screen.get_width() // 2, 78)))
+        self.ui.draw_stats_row(
+            screen,
+            [
+                f"Left: {self.left_score}",
+                f"Right: {self.right_score}",
+                f"Mode: {'PvC' if self.vs_computer else 'PvP'}",
+            ],
+        )
+        self.ui.draw_sub_stats(screen, f"Current mode: {mode_text}  |  First to {self.WIN_SCORE}")
+        self.ui.draw_footer(screen, "P: Pause  |  F5: Restart  |  1: PvP  |  2: PvC  |  Esc: Back")
 
         self.draw_mode_button(screen, self.pvp_button, "Player vs Player", not self.vs_computer)
         self.draw_mode_button(screen, self.pvc_button, "Player vs Computer", self.vs_computer)
 
-        screen.blit(mode_render, mode_render.get_rect(center=(screen.get_width() // 2, 172)))
-        screen.blit(controls, controls.get_rect(center=(screen.get_width() // 2, screen.get_height() - 30)))
-
         pygame.draw.rect(screen, theme.SURFACE, self.play_rect, border_radius=theme.RADIUS_MEDIUM)
+        pygame.draw.rect(screen, theme.SURFACE_ALT, self.play_rect, width=2, border_radius=theme.RADIUS_MEDIUM)
 
         dash_height = 20
         dash_gap = 14
@@ -293,3 +339,15 @@ class PongGame(GameBase):
         pygame.draw.rect(screen, theme.TEXT, self.left_paddle, border_radius=8)
         pygame.draw.rect(screen, theme.TEXT, self.right_paddle, border_radius=8)
         pygame.draw.ellipse(screen, theme.ACCENT, self.ball)
+
+        if self.paused and not self.game_over:
+            self.ui.draw_pause_overlay(screen, self.play_rect)
+
+        if self.game_over:
+            self.ui.draw_game_over(
+                screen,
+                self.play_rect,
+                self.winner_text or "Match Over",
+                f"Final Score: {self.left_score} - {self.right_score}",
+                f"Mode: {'PvC' if self.vs_computer else 'PvP'}",
+            )

@@ -6,207 +6,249 @@ import pygame
 
 from arcade_app.core.game_base import GameBase
 from arcade_app.ui import theme
+from arcade_app.ui.game_ui import GameUI
 
 
 class SpaceInvadersGame(GameBase):
     game_id = "space_invaders"
     title = "Space Invaders"
 
+    POWERUP_RAPID_FIRE = "rapid_fire"
+    POWERUP_SHIELD = "shield"
+
     def __init__(self, app) -> None:
         super().__init__(app)
 
-        self.title_font: pygame.font.Font | None = None
-        self.info_font: pygame.font.Font | None = None
-        self.small_font: pygame.font.Font | None = None
+        self.ui: GameUI | None = None
 
-        self.play_rect = pygame.Rect(0, 0, 1100, 620)
+        self.play_rect = pygame.Rect(0, 0, 1100, 640)
 
         self.player = pygame.Rect(0, 0, 70, 24)
-        self.player_speed = 520.0
+        self.player_speed = 460.0
 
-        self.player_bullets: list[dict] = []
+        self.player_bullets: list[pygame.Rect] = []
         self.enemy_bullets: list[pygame.Rect] = []
+        self.invaders: list[pygame.Rect] = []
         self.powerups: list[dict] = []
-
-        self.enemies: list[pygame.Rect] = []
-        self.enemy_direction = 1
-        self.enemy_speed = 40.0
-        self.enemy_drop_distance = 18
-        self.enemy_shot_timer = 0.0
-        self.enemy_shot_delay = 0.9
-
-        self.player_bullet_speed = 620.0
-        self.enemy_bullet_speed = 300.0
-        self.shoot_cooldown = 0.0
-        self.shoot_delay = 0.28
-
-        self.active_powerup: str | None = None
-        self.powerup_timer = 0.0
+        self.popups: list[dict] = []
 
         self.score = 0
         self.lives = 3
         self.wave = 1
-        self.is_game_over = False
-        self.is_won = False
+
+        self.invader_direction = 1
+        self.invader_speed = 32.0
+        self.invader_drop = 18
+        self.invader_move_timer = 0.0
+        self.invader_move_delay = 0.45
+
+        self.player_shot_cooldown = 0.0
+        self.enemy_shot_timer = 0.0
+
+        self.rapid_fire_timer = 0.0
+        self.shield_timer = 0.0
+
+        self.game_over = False
+        self.paused = False
 
     def enter(self) -> None:
-        self.title_font = pygame.font.SysFont("arial", theme.HEADING_SIZE, bold=True)
-        self.info_font = pygame.font.SysFont("arial", theme.BODY_SIZE)
-        self.small_font = pygame.font.SysFont("arial", theme.CAPTION_SIZE)
-
-        screen = pygame.display.get_surface()
-        if screen is not None:
-            self.rebuild_layout(screen)
-
+        self.ui = GameUI()
         self.reset_game()
 
     def rebuild_layout(self, screen: pygame.Surface) -> None:
         self.play_rect = pygame.Rect(
             (screen.get_width() - 1100) // 2,
-            140,
+            165,
             1100,
-            620,
+            640,
         )
 
-    def reset_player(self) -> None:
+    def reset_game(self) -> None:
+        screen = pygame.display.get_surface()
+        if screen is not None:
+            self.rebuild_layout(screen)
+
+        self.score = 0
+        self.lives = 3
+        self.wave = 1
+        self.game_over = False
+        self.paused = False
+        self.player_bullets.clear()
+        self.enemy_bullets.clear()
+        self.powerups.clear()
+        self.popups.clear()
+
         self.player = pygame.Rect(
             self.play_rect.centerx - 35,
-            self.play_rect.bottom - 45,
+            self.play_rect.bottom - 40,
             70,
             24,
         )
 
-    def build_enemy_wave(self) -> None:
-        self.enemies.clear()
+        self.player_shot_cooldown = 0.0
+        self.enemy_shot_timer = 1.0
+        self.invader_direction = 1
+        self.rapid_fire_timer = 0.0
+        self.shield_timer = 0.0
 
-        rows = 4
-        cols = 8
-        enemy_width = 54
-        enemy_height = 32
-        gap_x = 26
-        gap_y = 22
+        self.spawn_wave()
 
-        formation_width = cols * enemy_width + (cols - 1) * gap_x
-        start_x = self.play_rect.centerx - formation_width // 2
-        start_y = self.play_rect.y + 60
+    def spawn_wave(self) -> None:
+        self.invaders.clear()
+
+        rows = 5
+        cols = 9
+        invader_w = 52
+        invader_h = 32
+        gap_x = 18
+        gap_y = 16
+
+        start_x = self.play_rect.left + 120
+        start_y = self.play_rect.top + 70
 
         for row in range(rows):
             for col in range(cols):
-                x = start_x + col * (enemy_width + gap_x)
-                y = start_y + row * (enemy_height + gap_y)
-                self.enemies.append(pygame.Rect(x, y, enemy_width, enemy_height))
+                x = start_x + col * (invader_w + gap_x)
+                y = start_y + row * (invader_h + gap_y)
+                self.invaders.append(pygame.Rect(x, y, invader_w, invader_h))
 
-        self.enemy_direction = 1
+        self.invader_speed = 32.0 + self.wave * 6
+        self.invader_move_delay = max(0.12, 0.45 - self.wave * 0.03)
 
-    def reset_game(self) -> None:
-        self.score = 0
-        self.lives = 3
-        self.wave = 1
-        self.is_game_over = False
-        self.is_won = False
+    def add_popup(self, text: str, pos: tuple[int, int], color: tuple[int, int, int]) -> None:
+        self.popups.append(
+            {
+                "text": text,
+                "pos": pygame.Vector2(pos[0], pos[1]),
+                "vel": pygame.Vector2(0, -34),
+                "life": 0.6,
+                "max_life": 0.6,
+                "color": color,
+                "alpha": 255,
+            }
+        )
 
-        self.player_bullets.clear()
-        self.enemy_bullets.clear()
-        self.powerups.clear()
-        self.active_powerup = None
-        self.powerup_timer = 0.0
+    def update_popups(self, dt: float) -> None:
+        updated: list[dict] = []
+        for popup in self.popups:
+            popup["life"] -= dt
+            if popup["life"] <= 0:
+                continue
+            popup["pos"] += popup["vel"] * dt
+            popup["alpha"] = int(255 * (popup["life"] / popup["max_life"]))
+            updated.append(popup)
+        self.popups = updated
 
-        self.shoot_cooldown = 0.0
-        self.enemy_shot_timer = 0.0
-        self.enemy_speed = 40.0
-
-        self.reset_player()
-        self.build_enemy_wave()
-
-    def start_next_wave(self) -> None:
-        self.wave += 1
-        self.player_bullets.clear()
-        self.enemy_bullets.clear()
-        self.powerups.clear()
-        self.build_enemy_wave()
-        self.enemy_speed += 12.0
-
-    def spawn_powerup(self, x: int, y: int) -> None:
-        if random.random() > 0.18:
+    def maybe_spawn_powerup(self, invader: pygame.Rect) -> None:
+        if random.random() > 0.12:
             return
 
-        powerup_type = random.choice(["rapid", "triple", "laser"])
-        rect = pygame.Rect(x - 12, y - 12, 24, 24)
-        self.powerups.append({"type": powerup_type, "rect": rect, "speed": 160.0})
+        kind = random.choice([self.POWERUP_RAPID_FIRE, self.POWERUP_SHIELD])
+        color = theme.ACCENT if kind == self.POWERUP_RAPID_FIRE else theme.WARNING
+
+        self.powerups.append(
+            {
+                "kind": kind,
+                "rect": pygame.Rect(invader.centerx - 12, invader.centery - 12, 24, 24),
+                "color": color,
+            }
+        )
 
     def fire_player_bullet(self) -> None:
-        if self.active_powerup == "triple":
-            for offset in (-20, 0, 20):
-                bullet = {
-                    "rect": pygame.Rect(self.player.centerx - 3 + offset, self.player.top - 16, 6, 16),
-                    "speed": self.player_bullet_speed,
-                    "piercing": False,
-                }
-                self.player_bullets.append(bullet)
+        if self.player_shot_cooldown > 0 or self.game_over or self.paused:
             return
 
-        if self.active_powerup == "laser":
-            bullet = {
-                "rect": pygame.Rect(self.player.centerx - 5, self.player.top - 34, 10, 34),
-                "speed": self.player_bullet_speed + 220.0,
-                "piercing": True,
-            }
-            self.player_bullets.append(bullet)
-            return
-
-        bullet = {
-            "rect": pygame.Rect(self.player.centerx - 3, self.player.top - 16, 6, 16),
-            "speed": self.player_bullet_speed,
-            "piercing": False,
-        }
+        bullet = pygame.Rect(self.player.centerx - 3, self.player.top - 14, 6, 14)
         self.player_bullets.append(bullet)
+        self.player_shot_cooldown = 0.08 if self.rapid_fire_timer > 0 else 0.24
 
     def fire_enemy_bullet(self) -> None:
-        if not self.enemies:
+        if not self.invaders:
             return
 
-        shooters_by_col: dict[int, pygame.Rect] = {}
-        for enemy in self.enemies:
-            col_key = enemy.centerx
-            if col_key not in shooters_by_col or enemy.y > shooters_by_col[col_key].y:
-                shooters_by_col[col_key] = enemy
+        columns: dict[int, pygame.Rect] = {}
+        for invader in self.invaders:
+            columns[invader.centerx] = max(columns.get(invader.centerx, invader), invader, key=lambda r: r.y)
 
-        shooter = random.choice(list(shooters_by_col.values()))
-        bullet = pygame.Rect(shooter.centerx - 3, shooter.bottom + 6, 6, 16)
+        shooter = random.choice(list(columns.values()))
+        bullet = pygame.Rect(shooter.centerx - 3, shooter.bottom + 4, 6, 14)
         self.enemy_bullets.append(bullet)
 
-    def apply_powerup(self, powerup_type: str) -> None:
-        self.active_powerup = powerup_type
-        self.powerup_timer = 8.0
-
-        if powerup_type == "rapid":
-            self.shoot_delay = 0.12
+    def collect_powerup(self, powerup: dict) -> None:
+        if powerup["kind"] == self.POWERUP_RAPID_FIRE:
+            self.rapid_fire_timer = 8.0
+            self.add_popup("RAPID FIRE", powerup["rect"].center, theme.ACCENT)
         else:
-            self.shoot_delay = 0.28
-
-    def clear_powerup(self) -> None:
-        self.active_powerup = None
-        self.powerup_timer = 0.0
-        self.shoot_delay = 0.28
+            self.shield_timer = 8.0
+            self.add_popup("SHIELD", powerup["rect"].center, theme.WARNING)
 
     def handle_events(self, events: list[pygame.event.Event]) -> None:
         for event in events:
-            if event.type != pygame.KEYDOWN:
-                continue
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    from arcade_app.scenes.game_select_scene import GameSelectScene
+                    self.app.scene_manager.go_to(GameSelectScene(self.app))
+                elif event.key == pygame.K_p and not self.game_over:
+                    self.paused = not self.paused
+                elif event.key == pygame.K_F5:
+                    self.reset_game()
+                elif event.key == pygame.K_SPACE:
+                    if self.game_over:
+                        self.reset_game()
+                    else:
+                        self.fire_player_bullet()
 
-            if event.key == pygame.K_ESCAPE:
-                from arcade_app.scenes.game_select_scene import GameSelectScene
-                self.app.scene_manager.go_to(GameSelectScene(self.app))
-            elif event.key == pygame.K_F5:
-                self.reset_game()
-            elif event.key == pygame.K_SPACE:
-                if not self.is_game_over and not self.is_won and self.shoot_cooldown <= 0:
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if self.game_over:
+                    self.reset_game()
+                else:
                     self.fire_player_bullet()
-                    self.shoot_cooldown = self.shoot_delay
 
-    def update_player(self, dt: float) -> None:
+    def update_invaders(self, dt: float) -> None:
+        self.invader_move_timer += dt
+        if self.invader_move_timer < self.invader_move_delay:
+            return
+
+        self.invader_move_timer = 0.0
+        move_x = int(self.invader_direction * self.invader_speed)
+
+        touching_edge = False
+        for invader in self.invaders:
+            next_left = invader.left + move_x
+            next_right = invader.right + move_x
+            if next_left <= self.play_rect.left + 20 or next_right >= self.play_rect.right - 20:
+                touching_edge = True
+                break
+
+        if touching_edge:
+            self.invader_direction *= -1
+            for invader in self.invaders:
+                invader.y += self.invader_drop
+        else:
+            for invader in self.invaders:
+                invader.x += move_x
+
+    def update(self, dt: float) -> None:
+        screen = pygame.display.get_surface()
+        if screen is not None:
+            self.rebuild_layout(screen)
+
+        self.update_popups(dt)
+
+        if self.paused:
+            return
+
+        if self.game_over:
+            return
+
+        if self.player_shot_cooldown > 0:
+            self.player_shot_cooldown -= dt
+        if self.rapid_fire_timer > 0:
+            self.rapid_fire_timer -= dt
+        if self.shield_timer > 0:
+            self.shield_timer -= dt
+
         keys = pygame.key.get_pressed()
-
         move = 0.0
         if keys[pygame.K_LEFT] or keys[pygame.K_a]:
             move -= 1.0
@@ -214,206 +256,137 @@ class SpaceInvadersGame(GameBase):
             move += 1.0
 
         self.player.x += int(move * self.player_speed * dt)
+        self.player.x = max(self.play_rect.left + 10, min(self.player.x, self.play_rect.right - 10 - self.player.width))
 
-        if self.player.left < self.play_rect.left:
-            self.player.left = self.play_rect.left
-        if self.player.right > self.play_rect.right:
-            self.player.right = self.play_rect.right
+        self.update_invaders(dt)
 
-    def update_player_bullets(self, dt: float) -> None:
-        for bullet in self.player_bullets[:]:
-            bullet["rect"].y -= int(bullet["speed"] * dt)
+        for bullet in self.player_bullets:
+            bullet.y -= int(520 * dt)
+        for bullet in self.enemy_bullets:
+            bullet.y += int((240 + self.wave * 10) * dt)
+        for powerup in self.powerups:
+            powerup["rect"].y += int(130 * dt)
 
-            if bullet["rect"].bottom < self.play_rect.top:
-                self.player_bullets.remove(bullet)
-                continue
+        self.player_bullets = [b for b in self.player_bullets if b.bottom > self.play_rect.top]
+        self.enemy_bullets = [b for b in self.enemy_bullets if b.top < self.play_rect.bottom]
+        self.powerups = [p for p in self.powerups if p["rect"].top < self.play_rect.bottom]
 
-            hit_enemies = [enemy for enemy in self.enemies if bullet["rect"].colliderect(enemy)]
-            if not hit_enemies:
-                continue
+        remaining_bullets: list[pygame.Rect] = []
+        remaining_invaders = self.invaders.copy()
 
-            for hit_enemy in hit_enemies:
-                if hit_enemy in self.enemies:
-                    self.enemies.remove(hit_enemy)
-                    self.score += 100
-                    self.spawn_powerup(hit_enemy.centerx, hit_enemy.centery)
+        for bullet in self.player_bullets:
+            hit = None
+            for invader in remaining_invaders:
+                if bullet.colliderect(invader):
+                    hit = invader
+                    break
 
-            if not bullet["piercing"] and bullet in self.player_bullets:
-                self.player_bullets.remove(bullet)
+            if hit is not None:
+                remaining_invaders.remove(hit)
+                reward = 50
+                self.score += reward
+                self.add_popup(f"+{reward}", hit.center, theme.ACCENT)
+                self.maybe_spawn_powerup(hit)
+            else:
+                remaining_bullets.append(bullet)
 
-    def update_enemy_bullets(self, dt: float) -> None:
-        for bullet in self.enemy_bullets[:]:
-            bullet.y += int(self.enemy_bullet_speed * dt)
+        self.player_bullets = remaining_bullets
+        self.invaders = remaining_invaders
 
-            if bullet.top > self.play_rect.bottom:
-                self.enemy_bullets.remove(bullet)
-                continue
-
-            if bullet.colliderect(self.player):
-                if bullet in self.enemy_bullets:
-                    self.enemy_bullets.remove(bullet)
-                self.lives -= 1
-
-                if self.lives <= 0:
-                    self.is_game_over = True
-                else:
-                    self.reset_player()
-                    self.player_bullets.clear()
-                    self.enemy_bullets.clear()
-                return
-
-    def update_powerups(self, dt: float) -> None:
         for powerup in self.powerups[:]:
-            powerup["rect"].y += int(powerup["speed"] * dt)
-
-            if powerup["rect"].top > self.play_rect.bottom:
-                self.powerups.remove(powerup)
-                continue
-
             if powerup["rect"].colliderect(self.player):
-                self.apply_powerup(powerup["type"])
+                self.collect_powerup(powerup)
                 self.powerups.remove(powerup)
 
-        if self.active_powerup is not None:
-            self.powerup_timer -= dt
-            if self.powerup_timer <= 0:
-                self.clear_powerup()
+        for bullet in self.enemy_bullets[:]:
+            if bullet.colliderect(self.player):
+                self.enemy_bullets.remove(bullet)
+                if self.shield_timer > 0:
+                    self.shield_timer = 0.0
+                    self.add_popup("SHIELD BROKE", self.player.center, theme.WARNING)
+                else:
+                    self.lives -= 1
+                    if self.lives <= 0:
+                        self.game_over = True
+                break
 
-    def update_enemies(self, dt: float) -> None:
-        if not self.enemies:
-            self.start_next_wave()
-            return
+        for invader in self.invaders:
+            if invader.bottom >= self.player.top:
+                self.game_over = True
+                break
 
-        move_x = int(self.enemy_speed * self.enemy_direction * dt)
-        reached_edge = False
-
-        for enemy in self.enemies:
-            enemy.x += move_x
-            if enemy.right >= self.play_rect.right - 10 or enemy.left <= self.play_rect.left + 10:
-                reached_edge = True
-
-        if reached_edge:
-            self.enemy_direction *= -1
-            for enemy in self.enemies:
-                enemy.y += self.enemy_drop_distance
-
-        for enemy in self.enemies:
-            if enemy.bottom >= self.player.top:
-                self.is_game_over = True
-                return
-
-    def update_enemy_shooting(self, dt: float) -> None:
-        self.enemy_shot_timer += dt
-        if self.enemy_shot_timer >= self.enemy_shot_delay:
-            self.enemy_shot_timer = 0.0
+        self.enemy_shot_timer -= dt
+        if self.enemy_shot_timer <= 0:
             self.fire_enemy_bullet()
+            self.enemy_shot_timer = max(0.22, 1.1 - self.wave * 0.08)
 
-    def update(self, dt: float) -> None:
-        screen = pygame.display.get_surface()
-        if screen is not None:
-            self.rebuild_layout(screen)
+        if not self.invaders and not self.game_over:
+            self.wave += 1
+            self.spawn_wave()
 
-        if self.shoot_cooldown > 0:
-            self.shoot_cooldown -= dt
-
-        if self.is_game_over or self.is_won:
-            return
-
-        self.update_player(dt)
-        self.update_player_bullets(dt)
-        self.update_enemy_bullets(dt)
-        self.update_powerups(dt)
-        self.update_enemies(dt)
-        self.update_enemy_shooting(dt)
-
-        if self.wave >= 5 and not self.enemies:
-            self.is_won = True
-
-    def draw_player(self, screen: pygame.Surface) -> None:
-        pygame.draw.rect(screen, theme.SUCCESS, self.player, border_radius=8)
-        turret = pygame.Rect(self.player.centerx - 7, self.player.top - 10, 14, 12)
-        pygame.draw.rect(screen, theme.SUCCESS, turret, border_radius=4)
-
-    def draw_enemy(self, screen: pygame.Surface, enemy: pygame.Rect) -> None:
-        pygame.draw.rect(screen, theme.DANGER, enemy, border_radius=8)
-
-        eye1 = pygame.Rect(enemy.x + 12, enemy.y + 10, 8, 8)
-        eye2 = pygame.Rect(enemy.right - 20, enemy.y + 10, 8, 8)
-        pygame.draw.rect(screen, theme.TEXT, eye1, border_radius=2)
-        pygame.draw.rect(screen, theme.TEXT, eye2, border_radius=2)
+    def draw_invader(self, screen: pygame.Surface, invader: pygame.Rect) -> None:
+        pygame.draw.rect(screen, theme.ACCENT, invader, border_radius=8)
+        eye_y = invader.top + 10
+        pygame.draw.circle(screen, theme.BACKGROUND, (invader.left + 14, eye_y), 3)
+        pygame.draw.circle(screen, theme.BACKGROUND, (invader.right - 14, eye_y), 3)
 
     def draw_powerup(self, screen: pygame.Surface, powerup: dict) -> None:
         rect = powerup["rect"]
-        ptype = powerup["type"]
-
-        color = {
-            "rapid": theme.WARNING,
-            "triple": theme.ACCENT,
-            "laser": theme.SUCCESS,
-        }[ptype]
-
-        pygame.draw.rect(screen, color, rect, border_radius=6)
-
-        assert self.small_font is not None
-        label_map = {"rapid": "R", "triple": "T", "laser": "L"}
-        label = self.small_font.render(label_map[ptype], True, theme.TEXT)
-        screen.blit(label, label.get_rect(center=rect.center))
+        pygame.draw.rect(screen, powerup["color"], rect, border_radius=6)
+        inner = rect.inflate(-8, -8)
+        pygame.draw.rect(screen, theme.BACKGROUND, inner, border_radius=4)
 
     def render(self, screen: pygame.Surface) -> None:
-        assert self.title_font is not None
-        assert self.info_font is not None
-        assert self.small_font is not None
+        assert self.ui is not None
 
         self.rebuild_layout(screen)
         screen.fill(theme.BACKGROUND)
 
-        title = self.title_font.render("Space Invaders", True, theme.TEXT)
-
-        if self.is_won:
-            status_text = "You defeated the invasion!"
-        elif self.is_game_over:
-            status_text = "Game Over"
-        else:
-            status_text = "Defend the base"
-
-        status = self.info_font.render(status_text, True, theme.TEXT)
-        score = self.info_font.render(f"Score: {self.score}", True, theme.TEXT)
-        lives = self.info_font.render(f"Lives: {self.lives}", True, theme.TEXT)
-        wave = self.info_font.render(f"Wave: {self.wave}", True, theme.TEXT)
-
-        if self.active_powerup is None:
-            powerup_text = "Powerup: None"
-        else:
-            powerup_text = f"Powerup: {self.active_powerup.title()} ({self.powerup_timer:0.1f}s)"
-        powerup_surface = self.small_font.render(powerup_text, True, theme.MUTED_TEXT)
-
-        controls = self.info_font.render(
-            "Move: Arrow Keys / A,D  |  Space: Shoot  |  F5: Restart  |  Esc: Back",
-            True,
-            theme.MUTED_TEXT,
+        self.ui.draw_header(
+            screen,
+            "Space Invaders",
+            "Move with A/D or Left/Right. Fire with Space or Click. Clear each wave.",
         )
-
-        screen.blit(title, title.get_rect(center=(screen.get_width() // 2, 32)))
-        screen.blit(status, status.get_rect(center=(screen.get_width() // 2, 75)))
-        screen.blit(score, score.get_rect(center=(screen.get_width() // 2 - 180, 110)))
-        screen.blit(lives, lives.get_rect(center=(screen.get_width() // 2, 110)))
-        screen.blit(wave, wave.get_rect(center=(screen.get_width() // 2 + 180, 110)))
-        screen.blit(powerup_surface, powerup_surface.get_rect(center=(screen.get_width() // 2, 134)))
-        screen.blit(controls, controls.get_rect(center=(screen.get_width() // 2, screen.get_height() - 28)))
+        self.ui.draw_stats_row(
+            screen,
+            [
+                f"Score: {self.score}",
+                f"Lives: {self.lives}",
+                f"Wave: {self.wave}",
+                f"Rapid: {'ON' if self.rapid_fire_timer > 0 else 'OFF'}",
+                f"Shield: {'ON' if self.shield_timer > 0 else 'OFF'}",
+            ],
+        )
+        self.ui.draw_sub_stats(screen, "Powerups: blue = rapid fire, yellow = shield.")
+        self.ui.draw_footer(screen, "P: Pause  |  F5: Restart  |  Esc: Back")
 
         pygame.draw.rect(screen, theme.SURFACE, self.play_rect, border_radius=theme.RADIUS_MEDIUM)
+        pygame.draw.rect(screen, theme.SURFACE_ALT, self.play_rect, width=2, border_radius=theme.RADIUS_MEDIUM)
 
-        for enemy in self.enemies:
-            self.draw_enemy(screen, enemy)
-
-        for bullet in self.player_bullets:
-            color = theme.SUCCESS if bullet["piercing"] else theme.ACCENT
-            pygame.draw.rect(screen, color, bullet["rect"], border_radius=3)
-
-        for bullet in self.enemy_bullets:
-            pygame.draw.rect(screen, theme.WARNING, bullet, border_radius=3)
+        for invader in self.invaders:
+            self.draw_invader(screen, invader)
 
         for powerup in self.powerups:
             self.draw_powerup(screen, powerup)
 
-        self.draw_player(screen)
+        player_color = theme.WARNING if self.shield_timer > 0 else theme.TEXT
+        pygame.draw.rect(screen, player_color, self.player, border_radius=8)
+
+        for bullet in self.player_bullets:
+            pygame.draw.rect(screen, theme.ACCENT, bullet, border_radius=4)
+        for bullet in self.enemy_bullets:
+            pygame.draw.rect(screen, theme.DANGER, bullet, border_radius=4)
+
+        self.ui.draw_floating_texts(screen, self.popups)
+
+        if self.paused and not self.game_over:
+            self.ui.draw_pause_overlay(screen, self.play_rect)
+
+        if self.game_over:
+            self.ui.draw_game_over(
+                screen,
+                self.play_rect,
+                "Game Over",
+                f"Final Score: {self.score}",
+                f"Final Wave: {self.wave}",
+            )

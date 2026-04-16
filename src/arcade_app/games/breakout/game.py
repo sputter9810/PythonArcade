@@ -6,6 +6,7 @@ import pygame
 
 from arcade_app.core.game_base import GameBase
 from arcade_app.ui import theme
+from arcade_app.ui.game_ui import GameUI
 
 
 class BreakoutGame(GameBase):
@@ -15,8 +16,7 @@ class BreakoutGame(GameBase):
     def __init__(self, app) -> None:
         super().__init__(app)
 
-        self.title_font: pygame.font.Font | None = None
-        self.info_font: pygame.font.Font | None = None
+        self.ui: GameUI | None = None
 
         self.play_rect = pygame.Rect(0, 0, 1100, 620)
 
@@ -35,10 +35,10 @@ class BreakoutGame(GameBase):
         self.lives = 3
         self.is_won = False
         self.is_game_over = False
+        self.paused = False
 
     def enter(self) -> None:
-        self.title_font = pygame.font.SysFont("arial", theme.HEADING_SIZE, bold=True)
-        self.info_font = pygame.font.SysFont("arial", theme.BODY_SIZE)
+        self.ui = GameUI()
 
         screen = pygame.display.get_surface()
         if screen is not None:
@@ -49,7 +49,7 @@ class BreakoutGame(GameBase):
     def rebuild_layout(self, screen: pygame.Surface) -> None:
         self.play_rect = pygame.Rect(
             (screen.get_width() - 1100) // 2,
-            140,
+            165,
             1100,
             620,
         )
@@ -91,6 +91,7 @@ class BreakoutGame(GameBase):
         self.lives = 3
         self.is_won = False
         self.is_game_over = False
+        self.paused = False
         self.build_bricks()
         self.reset_positions()
 
@@ -107,7 +108,11 @@ class BreakoutGame(GameBase):
                 if event.key == pygame.K_ESCAPE:
                     from arcade_app.scenes.game_select_scene import GameSelectScene
                     self.app.scene_manager.go_to(GameSelectScene(self.app))
+                elif event.key == pygame.K_p and not self.is_won and not self.is_game_over:
+                    self.paused = not self.paused
                 elif event.key == pygame.K_F5:
+                    self.reset_game()
+                elif event.key in (pygame.K_SPACE, pygame.K_RETURN) and (self.is_won or self.is_game_over):
                     self.reset_game()
 
     def update(self, dt: float) -> None:
@@ -115,7 +120,7 @@ class BreakoutGame(GameBase):
         if screen is not None:
             self.rebuild_layout(screen)
 
-        if self.is_won or self.is_game_over:
+        if self.paused or self.is_won or self.is_game_over:
             return
 
         keys = pygame.key.get_pressed()
@@ -199,40 +204,59 @@ class BreakoutGame(GameBase):
         return colors[min(band, len(colors) - 1)]
 
     def render(self, screen: pygame.Surface) -> None:
-        assert self.title_font is not None
-        assert self.info_font is not None
+        assert self.ui is not None
 
         self.rebuild_layout(screen)
         screen.fill(theme.BACKGROUND)
 
-        title = self.title_font.render("Breakout", True, theme.TEXT)
-
-        if self.is_won:
-            status_text = "You cleared all bricks!"
-        elif self.is_game_over:
-            status_text = "Game Over"
-        else:
-            status_text = "Break every brick"
-
-        status = self.info_font.render(status_text, True, theme.TEXT)
-        score = self.info_font.render(f"Score: {self.score}", True, theme.TEXT)
-        lives = self.info_font.render(f"Lives: {self.lives}", True, theme.TEXT)
-        controls = self.info_font.render(
-            "Move: Arrow Keys / A,D  |  F5: Restart  |  Esc: Back",
-            True,
-            theme.MUTED_TEXT,
+        self.ui.draw_header(
+            screen,
+            "Breakout",
+            "Move with Arrow Keys or A/D. Clear every brick and keep the ball alive.",
+        )
+        self.ui.draw_stats_row(
+            screen,
+            [
+                f"Score: {self.score}",
+                f"Lives: {self.lives}",
+                f"Bricks: {len(self.bricks)}",
+            ],
         )
 
-        screen.blit(title, title.get_rect(center=(screen.get_width() // 2, 32)))
-        screen.blit(status, status.get_rect(center=(screen.get_width() // 2, 75)))
-        screen.blit(score, score.get_rect(center=(screen.get_width() // 2 - 100, 110)))
-        screen.blit(lives, lives.get_rect(center=(screen.get_width() // 2 + 100, 110)))
-        screen.blit(controls, controls.get_rect(center=(screen.get_width() // 2, screen.get_height() - 28)))
+        if self.is_won:
+            sub = "Board cleared."
+        elif self.is_game_over:
+            sub = "No lives left."
+        else:
+            sub = "Use paddle angles to control the rebound."
+        self.ui.draw_sub_stats(screen, sub)
+        self.ui.draw_footer(screen, "P: Pause  |  F5: Restart  |  Esc: Back")
 
         pygame.draw.rect(screen, theme.SURFACE, self.play_rect, border_radius=theme.RADIUS_MEDIUM)
+        pygame.draw.rect(screen, theme.SURFACE_ALT, self.play_rect, width=2, border_radius=theme.RADIUS_MEDIUM)
 
         for brick in self.bricks:
             pygame.draw.rect(screen, self.brick_color(brick), brick, border_radius=8)
 
         pygame.draw.rect(screen, theme.TEXT, self.paddle, border_radius=8)
         pygame.draw.ellipse(screen, theme.ACCENT, self.ball)
+
+        if self.paused and not self.is_won and not self.is_game_over:
+            self.ui.draw_pause_overlay(screen, self.play_rect)
+
+        if self.is_won:
+            self.ui.draw_game_over(
+                screen,
+                self.play_rect,
+                "You Win",
+                f"Final Score: {self.score}",
+                f"Lives Remaining: {self.lives}",
+            )
+        elif self.is_game_over:
+            self.ui.draw_game_over(
+                screen,
+                self.play_rect,
+                "Game Over",
+                f"Final Score: {self.score}",
+                "All lives lost.",
+            )

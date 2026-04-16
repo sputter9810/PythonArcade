@@ -6,6 +6,7 @@ import pygame
 
 from arcade_app.core.game_base import GameBase
 from arcade_app.ui import theme
+from arcade_app.ui.game_ui import GameUI
 
 
 class SnakeGame(GameBase):
@@ -15,8 +16,7 @@ class SnakeGame(GameBase):
     def __init__(self, app) -> None:
         super().__init__(app)
 
-        self.title_font: pygame.font.Font | None = None
-        self.info_font: pygame.font.Font | None = None
+        self.ui: GameUI | None = None
 
         self.grid_size = 20
         self.cell_size = 28
@@ -27,6 +27,7 @@ class SnakeGame(GameBase):
 
         self.score = 0
         self.game_over = False
+        self.paused = False
 
         self.reset()
 
@@ -37,19 +38,19 @@ class SnakeGame(GameBase):
         self.next_direction = (1, 0)
         self.food = self.spawn_food()
         self.game_over = False
+        self.paused = False
         self.score = 0
         self.move_timer = 0.0
 
     def enter(self) -> None:
-        self.title_font = pygame.font.SysFont("arial", theme.HEADING_SIZE, bold=True)
-        self.info_font = pygame.font.SysFont("arial", theme.BODY_SIZE)
+        self.ui = GameUI()
 
     def rebuild_layout(self, screen: pygame.Surface) -> None:
         board_width = self.grid_size * self.cell_size
         board_height = self.grid_size * self.cell_size
         self.board_rect = pygame.Rect(
             (screen.get_width() - board_width) // 2,
-            130,
+            165,
             board_width,
             board_height,
         )
@@ -99,7 +100,9 @@ class SnakeGame(GameBase):
                 if event.key == pygame.K_ESCAPE:
                     from arcade_app.scenes.game_select_scene import GameSelectScene
                     self.app.scene_manager.go_to(GameSelectScene(self.app))
-                elif event.key == pygame.K_r:
+                elif event.key == pygame.K_p and not self.game_over:
+                    self.paused = not self.paused
+                elif event.key == pygame.K_F5:
                     self.reset()
                 elif event.key in (pygame.K_UP, pygame.K_w):
                     self.set_direction((0, -1))
@@ -111,6 +114,13 @@ class SnakeGame(GameBase):
                     self.set_direction((1, 0))
 
     def update(self, dt: float) -> None:
+        screen = pygame.display.get_surface()
+        if screen is not None:
+            self.rebuild_layout(screen)
+
+        if self.paused or self.game_over:
+            return
+
         self.move_timer += dt
         if self.move_timer >= self.move_delay:
             self.move_timer = 0.0
@@ -132,29 +142,33 @@ class SnakeGame(GameBase):
         pygame.draw.rect(screen, color, rect, border_radius=6)
 
     def render(self, screen: pygame.Surface) -> None:
-        assert self.title_font is not None
-        assert self.info_font is not None
+        assert self.ui is not None
 
         self.rebuild_layout(screen)
         screen.fill(theme.BACKGROUND)
 
-        title = self.title_font.render("Snake", True, theme.TEXT)
-        score = self.info_font.render(f"Score: {self.score}", True, theme.TEXT)
+        self.ui.draw_header(
+            screen,
+            "Snake",
+            "Move with Arrow Keys or WASD. Eat food, grow longer, and avoid collisions.",
+        )
+        self.ui.draw_stats_row(
+            screen,
+            [
+                f"Score: {self.score}",
+                f"Length: {len(self.snake)}",
+            ],
+        )
 
         if self.game_over:
-            status_text = "Game Over - Press R to Restart"
+            sub = "Run ended. You hit a wall or yourself."
         else:
-            status_text = "Use Arrow Keys / WASD to move"
-
-        status = self.info_font.render(status_text, True, theme.MUTED_TEXT)
-        controls = self.info_font.render("R: Restart  |  Esc: Back", True, theme.MUTED_TEXT)
-
-        screen.blit(title, title.get_rect(center=(screen.get_width() // 2, 35)))
-        screen.blit(score, score.get_rect(center=(screen.get_width() // 2, 75)))
-        screen.blit(status, status.get_rect(center=(screen.get_width() // 2, 100)))
-        screen.blit(controls, controls.get_rect(center=(screen.get_width() // 2, 730)))
+            sub = "Stay smooth through corners and keep your path open."
+        self.ui.draw_sub_stats(screen, sub)
+        self.ui.draw_footer(screen, "P: Pause  |  F5: Restart  |  Esc: Back")
 
         pygame.draw.rect(screen, theme.SURFACE, self.board_rect, border_radius=theme.RADIUS_MEDIUM)
+        pygame.draw.rect(screen, theme.SURFACE_ALT, self.board_rect, width=2, border_radius=theme.RADIUS_MEDIUM)
 
         for y in range(self.grid_size):
             for x in range(self.grid_size):
@@ -171,3 +185,15 @@ class SnakeGame(GameBase):
         for index, segment in enumerate(self.snake):
             color = theme.ACCENT if index == 0 else theme.SUCCESS
             self.draw_cell(screen, segment, color)
+
+        if self.paused and not self.game_over:
+            self.ui.draw_pause_overlay(screen, self.board_rect)
+
+        if self.game_over:
+            self.ui.draw_game_over(
+                screen,
+                self.board_rect,
+                "Game Over",
+                f"Final Score: {self.score}",
+                f"Snake Length: {len(self.snake)}",
+            )

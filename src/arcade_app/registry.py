@@ -5,7 +5,9 @@ from arcade_app.games.aim_trainer.game import AimTrainerGame
 from arcade_app.games.asteroids.game import AsteroidsGame
 from arcade_app.games.battleships.game import BattleshipsGame
 from arcade_app.games.breakout.game import BreakoutGame
+from arcade_app.games.bullet_hell_lite.game import BulletHellLiteGame
 from arcade_app.games.connect4.game import Connect4Game
+from arcade_app.games.crossword.game import CrosswordGame
 from arcade_app.games.dodge_falling_blocks.game import DodgeFallingBlocksGame
 from arcade_app.games.endless_runner.game import EndlessRunnerGame
 from arcade_app.games.flappy_bird.game import FlappyBirdGame
@@ -15,10 +17,12 @@ from arcade_app.games.hangman.game import HangmanGame
 from arcade_app.games.maze.game import MazeGame
 from arcade_app.games.memory_match.game import MemoryMatchGame
 from arcade_app.games.minesweeper.game import MinesweeperGame
+from arcade_app.games.pipe_connect.game import PipeConnectGame
 from arcade_app.games.platformer.game import PlatformerGame
 from arcade_app.games.pong.game import PongGame
 from arcade_app.games.reaction_timer.game import ReactionTimerGame
 from arcade_app.games.simon_says.game import SimonSaysGame
+from arcade_app.games.sliding_puzzle.game import SlidingPuzzleGame
 from arcade_app.games.snake.game import SnakeGame
 from arcade_app.games.space_invaders.game import SpaceInvadersGame
 from arcade_app.games.sudoku.game import SudokuGame
@@ -27,6 +31,7 @@ from arcade_app.games.tic_tac_toe.game import TicTacToeGame
 from arcade_app.games.time_attack_challenge.game import TimeAttackChallengeGame
 from arcade_app.games.top_down_shooter.game import TopDownShooterGame
 from arcade_app.games.whac_a_mole.game import WhacAMoleGame
+from arcade_app.games.zombie_survival.game import ZombieSurvivalGame
 from arcade_app.scenes.placeholder_game_scene import PlaceholderGameScene
 
 
@@ -62,7 +67,7 @@ GAME_REGISTRY = sorted(
         {
             "id": "battleships",
             "title": "Battleships",
-            "description": "Place your fleet and hunt down the enemy ships.",
+            "description": "Place your fleet manually, then hunt down the enemy ships.",
             "category": "Strategy",
             "modes": ["PvP", "PvC"],
             "implemented": True,
@@ -78,6 +83,15 @@ GAME_REGISTRY = sorted(
             "scene_class": BreakoutGame,
         },
         {
+            "id": "bullet_hell_lite",
+            "title": "Bullet Hell Lite",
+            "description": "Dodge dense bullet patterns and survive as long as possible.",
+            "category": "Skill",
+            "modes": ["Solo"],
+            "implemented": True,
+            "scene_class": BulletHellLiteGame,
+        },
+        {
             "id": "connect4",
             "title": "Connect 4",
             "description": "Drop discs and connect four before your opponent does.",
@@ -85,6 +99,15 @@ GAME_REGISTRY = sorted(
             "modes": ["PvP", "PvC"],
             "implemented": True,
             "scene_class": Connect4Game,
+        },
+        {
+            "id": "crossword",
+            "title": "Crossword",
+            "description": "Fill a clue-driven grid by solving across and down answers.",
+            "category": "Word",
+            "modes": ["Solo"],
+            "implemented": True,
+            "scene_class": CrosswordGame,
         },
         {
             "id": "dodge_falling_blocks",
@@ -152,7 +175,7 @@ GAME_REGISTRY = sorted(
         {
             "id": "memory_match",
             "title": "Memory Match",
-            "description": "Flip cards, match pairs, and test your memory across difficulties.",
+            "description": "Flip cards, match coloured pairs, and test your memory across difficulties.",
             "category": "Puzzle",
             "modes": ["Solo"],
             "implemented": True,
@@ -166,6 +189,15 @@ GAME_REGISTRY = sorted(
             "modes": ["Solo"],
             "implemented": True,
             "scene_class": MinesweeperGame,
+        },
+        {
+            "id": "pipe_connect",
+            "title": "Pipe Connect",
+            "description": "Rotate pipe pieces to link the source to the sink and complete the flow.",
+            "category": "Puzzle",
+            "modes": ["Solo"],
+            "implemented": True,
+            "scene_class": PipeConnectGame,
         },
         {
             "id": "platformer",
@@ -204,6 +236,15 @@ GAME_REGISTRY = sorted(
             "scene_class": SimonSaysGame,
         },
         {
+            "id": "sliding_puzzle",
+            "title": "Sliding Puzzle",
+            "description": "Reorder the numbered tiles into the solved layout across multiple board sizes.",
+            "category": "Puzzle",
+            "modes": ["Solo"],
+            "implemented": True,
+            "scene_class": SlidingPuzzleGame,
+        },
+        {
             "id": "snake",
             "title": "Snake",
             "description": "Grow longer, avoid collisions, and chase a higher score.",
@@ -224,7 +265,7 @@ GAME_REGISTRY = sorted(
         {
             "id": "sudoku",
             "title": "Sudoku",
-            "description": "Solve a fresh puzzle each run with notes and mistake tracking.",
+            "description": "Solve a fresh generated puzzle each run with notes, difficulty settings, and mistake tracking.",
             "category": "Puzzle",
             "modes": ["Solo"],
             "implemented": True,
@@ -274,6 +315,15 @@ GAME_REGISTRY = sorted(
             "modes": ["Solo"],
             "implemented": True,
             "scene_class": WhacAMoleGame,
+        },
+        {
+            "id": "zombie_survival",
+            "title": "Zombie Survival",
+            "description": "Survive waves of zombies, kite the horde, and collect survival powerups.",
+            "category": "Action",
+            "modes": ["Solo"],
+            "implemented": True,
+            "scene_class": ZombieSurvivalGame,
         },
     ],
     key=lambda game: str(game["title"]).lower(),

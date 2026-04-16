@@ -1,152 +1,216 @@
 from __future__ import annotations
 
 import random
+
 import pygame
 
 from arcade_app.core.game_base import GameBase
 from arcade_app.ui import theme
+from arcade_app.ui.game_ui import GameUI
 
 
 class FlappyBirdGame(GameBase):
     game_id = "flappy_bird"
     title = "Flappy Bird"
 
-    def __init__(self, app):
+    def __init__(self, app) -> None:
         super().__init__(app)
 
-        # Player
-        self.bird_y = 0
-        self.bird_vel = 0
+        self.ui: GameUI | None = None
 
-        # Physics
+        self.play_rect = pygame.Rect(0, 0, 1000, 620)
+
+        self.bird_y = 0.0
+        self.bird_vel = 0.0
+        self.bird_x = 280
+        self.bird_size = 40
+
         self.gravity = 0.5
-        self.flap_strength = -9
+        self.flap_strength = -9.0
 
-        # Pipes
-        self.pipes = []
+        self.pipes: list[dict] = []
         self.pipe_width = 80
         self.pipe_gap = 180
-        self.pipe_speed = 4
+        self.pipe_speed = 4.0
 
-        # Game state
         self.score = 0
         self.game_over = False
+        self.paused = False
 
-        # Layout
-        self.bird_x = 300
-        self.ground_y = 700
+        self.ground_height = 70
 
-        # Fonts
-        self.title_font = None
-        self.score_font = None
-        self.small_font = None
-
-    def enter(self):
-        self.title_font = pygame.font.SysFont("arial", theme.HEADING_SIZE, bold=True)
-        self.score_font = pygame.font.SysFont("arial", 48, bold=True)
-        self.small_font = pygame.font.SysFont("arial", theme.CAPTION_SIZE)
-
+    def enter(self) -> None:
+        self.ui = GameUI()
         self.reset()
 
-    def reset(self):
-        self.bird_y = 400
-        self.bird_vel = 0
+    def rebuild_layout(self, screen: pygame.Surface) -> None:
+        self.play_rect = pygame.Rect(0, 0, 1000, 620)
+        self.play_rect.centerx = screen.get_width() // 2
+        self.play_rect.top = 165
+
+    def reset(self) -> None:
+        screen = pygame.display.get_surface()
+        if screen is not None:
+            self.rebuild_layout(screen)
+
+        self.bird_y = float(self.play_rect.centery - 20)
+        self.bird_vel = 0.0
         self.pipes.clear()
         self.score = 0
         self.game_over = False
+        self.paused = False
 
+        start_x = self.play_rect.left + 620
         for i in range(3):
-            self.spawn_pipe(600 + i * 300)
+            self.spawn_pipe(start_x + i * 280)
 
-    def spawn_pipe(self, x):
-        gap_y = random.randint(200, 500)
-        self.pipes.append({
-            "x": x,
-            "gap_y": gap_y,
-            "passed": False
-        })
+    def spawn_pipe(self, x: int) -> None:
+        min_gap_y = self.play_rect.top + 140
+        max_gap_y = self.play_rect.bottom - self.ground_height - 140
+        gap_y = random.randint(min_gap_y, max_gap_y)
 
-    def handle_events(self, events):
+        self.pipes.append(
+            {
+                "x": x,
+                "gap_y": gap_y,
+                "passed": False,
+            }
+        )
+
+    def flap(self) -> None:
+        if self.game_over or self.paused:
+            return
+        self.bird_vel = self.flap_strength
+
+    def handle_events(self, events: list[pygame.event.Event]) -> None:
         for event in events:
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     from arcade_app.scenes.game_select_scene import GameSelectScene
                     self.app.scene_manager.go_to(GameSelectScene(self.app))
-
-                if event.key == pygame.K_SPACE:
+                elif event.key == pygame.K_p and not self.game_over:
+                    self.paused = not self.paused
+                elif event.key == pygame.K_F5:
+                    self.reset()
+                elif event.key == pygame.K_SPACE:
                     if self.game_over:
                         self.reset()
                     else:
-                        self.bird_vel = self.flap_strength
+                        self.flap()
 
-            if event.type == pygame.MOUSEBUTTONDOWN:
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if self.game_over:
                     self.reset()
                 else:
-                    self.bird_vel = self.flap_strength
+                    self.flap()
 
-    def update(self, dt):
-        if self.game_over:
+    def update(self, dt: float) -> None:
+        screen = pygame.display.get_surface()
+        if screen is not None:
+            self.rebuild_layout(screen)
+
+        if self.paused or self.game_over:
             return
 
-        # Bird physics
         self.bird_vel += self.gravity
         self.bird_y += self.bird_vel
 
-        # Move pipes
         for pipe in self.pipes:
             pipe["x"] -= self.pipe_speed
 
-        # Spawn new pipes
-        if self.pipes and self.pipes[-1]["x"] < 900:
-            self.spawn_pipe(1200)
+        if self.pipes and self.pipes[-1]["x"] < self.play_rect.right - 180:
+            self.spawn_pipe(self.play_rect.right + 140)
 
-        # Remove old pipes
-        self.pipes = [p for p in self.pipes if p["x"] > -100]
+        self.pipes = [p for p in self.pipes if p["x"] > self.play_rect.left - 120]
 
-        # Score
         for pipe in self.pipes:
-            if not pipe["passed"] and pipe["x"] < self.bird_x:
+            if not pipe["passed"] and pipe["x"] + self.pipe_width < self.bird_x:
                 pipe["passed"] = True
                 self.score += 1
 
-        # Collision
-        bird_rect = pygame.Rect(self.bird_x, self.bird_y, 40, 40)
+        bird_rect = pygame.Rect(self.bird_x, int(self.bird_y), self.bird_size, self.bird_size)
 
-        if self.bird_y > self.ground_y or self.bird_y < 0:
+        if bird_rect.top <= self.play_rect.top or bird_rect.bottom >= self.play_rect.bottom - self.ground_height:
             self.game_over = True
 
         for pipe in self.pipes:
-            top_rect = pygame.Rect(pipe["x"], 0, self.pipe_width, pipe["gap_y"] - self.pipe_gap // 2)
-            bottom_rect = pygame.Rect(pipe["x"], pipe["gap_y"] + self.pipe_gap // 2, self.pipe_width, 800)
+            top_rect = pygame.Rect(
+                pipe["x"],
+                self.play_rect.top,
+                self.pipe_width,
+                pipe["gap_y"] - self.pipe_gap // 2 - self.play_rect.top,
+            )
+            bottom_rect = pygame.Rect(
+                pipe["x"],
+                pipe["gap_y"] + self.pipe_gap // 2,
+                self.pipe_width,
+                self.play_rect.bottom - self.ground_height - (pipe["gap_y"] + self.pipe_gap // 2),
+            )
 
             if bird_rect.colliderect(top_rect) or bird_rect.colliderect(bottom_rect):
                 self.game_over = True
+                break
 
-    def render(self, screen):
-        screen.fill((135, 206, 235))  # sky blue
+    def render(self, screen: pygame.Surface) -> None:
+        assert self.ui is not None
 
-        # Bird
-        pygame.draw.rect(screen, (255, 255, 0), (self.bird_x, self.bird_y, 40, 40))
+        self.rebuild_layout(screen)
+        screen.fill(theme.BACKGROUND)
 
-        # Pipes
-        for pipe in self.pipes:
-            pygame.draw.rect(screen, (0, 200, 0),
-                             (pipe["x"], 0, self.pipe_width, pipe["gap_y"] - self.pipe_gap // 2))
-            pygame.draw.rect(screen, (0, 200, 0),
-                             (pipe["x"], pipe["gap_y"] + self.pipe_gap // 2, self.pipe_width, 800))
+        self.ui.draw_header(
+            screen,
+            "Flappy Bird",
+            "Space or Click to flap. Thread the gaps and stay above the ground.",
+        )
+        self.ui.draw_stats_row(
+            screen,
+            [
+                f"Score: {self.score}",
+            ],
+        )
 
-        # Ground
-        pygame.draw.rect(screen, (200, 180, 120), (0, self.ground_y, screen.get_width(), 200))
-
-        # Score
-        score_text = self.score_font.render(str(self.score), True, (0, 0, 0))
-        screen.blit(score_text, score_text.get_rect(center=(screen.get_width() // 2, 80)))
-
-        # Game over
         if self.game_over:
-            text = self.title_font.render("Game Over", True, (0, 0, 0))
-            screen.blit(text, text.get_rect(center=(screen.get_width() // 2, 300)))
+            sub = "You clipped a pipe or the floor."
+        else:
+            sub = "Quick taps keep the height under control."
+        self.ui.draw_sub_stats(screen, sub)
+        self.ui.draw_footer(screen, "P: Pause  |  F5: Restart  |  Esc: Back")
 
-            restart = self.small_font.render("Press Space / Click to Restart", True, (0, 0, 0))
-            screen.blit(restart, restart.get_rect(center=(screen.get_width() // 2, 350)))
+        sky = pygame.Rect(self.play_rect.left, self.play_rect.top, self.play_rect.width, self.play_rect.height)
+        pygame.draw.rect(screen, (135, 206, 235), sky, border_radius=theme.RADIUS_MEDIUM)
+        pygame.draw.rect(screen, theme.SURFACE_ALT, sky, width=2, border_radius=theme.RADIUS_MEDIUM)
+
+        for pipe in self.pipes:
+            top_height = pipe["gap_y"] - self.pipe_gap // 2 - self.play_rect.top
+            bottom_y = pipe["gap_y"] + self.pipe_gap // 2
+            bottom_height = self.play_rect.bottom - self.ground_height - bottom_y
+
+            top_rect = pygame.Rect(pipe["x"], self.play_rect.top, self.pipe_width, top_height)
+            bottom_rect = pygame.Rect(pipe["x"], bottom_y, self.pipe_width, bottom_height)
+
+            pygame.draw.rect(screen, (0, 170, 0), top_rect, border_radius=10)
+            pygame.draw.rect(screen, (0, 170, 0), bottom_rect, border_radius=10)
+
+        ground_rect = pygame.Rect(
+            self.play_rect.left,
+            self.play_rect.bottom - self.ground_height,
+            self.play_rect.width,
+            self.ground_height,
+        )
+        pygame.draw.rect(screen, (200, 180, 120), ground_rect)
+
+        bird_rect = pygame.Rect(self.bird_x, int(self.bird_y), self.bird_size, self.bird_size)
+        pygame.draw.rect(screen, (255, 225, 0), bird_rect, border_radius=10)
+        pygame.draw.circle(screen, theme.TEXT, (bird_rect.right - 10, bird_rect.top + 12), 3)
+
+        if self.paused and not self.game_over:
+            self.ui.draw_pause_overlay(screen, self.play_rect)
+
+        if self.game_over:
+            self.ui.draw_game_over(
+                screen,
+                self.play_rect,
+                "Game Over",
+                f"Final Score: {self.score}",
+                "Press Space / Click / F5 to try again.",
+            )

@@ -1,300 +1,452 @@
 from __future__ import annotations
 
+import random
+
 import pygame
 
 from arcade_app.core.game_base import GameBase
-from arcade_app.games.battleships.logic import BattleshipsLogic
 from arcade_app.ui import theme
+from arcade_app.ui.game_ui import GameUI
 
 
 class BattleshipsGame(GameBase):
     game_id = "battleships"
     title = "Battleships"
 
+    GRID_SIZE = 8
+    CELL_SIZE = 46
+    SHIP_SIZES = [5, 4, 3, 3, 2]
+
+    STATE_PLACEMENT = "placement"
+    STATE_BATTLE = "battle"
+
     def __init__(self, app) -> None:
         super().__init__(app)
-        self.logic = BattleshipsLogic()
+        self.ui: GameUI | None = None
+        self.mode_font: pygame.font.Font | None = None
 
-        self.title_font: pygame.font.Font | None = None
-        self.info_font: pygame.font.Font | None = None
-        self.small_font: pygame.font.Font | None = None
+        self.play_rect = pygame.Rect(0, 0, 1120, 640)
+        self.player_board_rect = pygame.Rect(0, 0, self.GRID_SIZE * self.CELL_SIZE, self.GRID_SIZE * self.CELL_SIZE)
+        self.enemy_board_rect = pygame.Rect(0, 0, self.GRID_SIZE * self.CELL_SIZE, self.GRID_SIZE * self.CELL_SIZE)
+        self.pvp_button = pygame.Rect(0, 0, 170, 40)
+        self.pvc_button = pygame.Rect(0, 0, 170, 40)
 
-        self.left_board_rect = pygame.Rect(0, 0, 420, 420)
-        self.right_board_rect = pygame.Rect(0, 0, 420, 420)
+        self.vs_computer = True
+        self.paused = False
+        self.completed = False
+        self.winner_text = ""
 
-        self.left_cells: list[list[pygame.Rect]] = []
-        self.right_cells: list[list[pygame.Rect]] = []
+        self.state = self.STATE_PLACEMENT
+        self.placement_index = 0
+        self.placement_horizontal = True
+        self.hover_cell: tuple[int, int] | None = None
 
-        self.pvp_button = pygame.Rect(0, 0, 180, 44)
-        self.pvc_button = pygame.Rect(0, 0, 180, 44)
+        self.player_ships: list[set[tuple[int, int]]] = []
+        self.enemy_ships: list[set[tuple[int, int]]] = []
+        self.player_hits: set[tuple[int, int]] = set()
+        self.player_misses: set[tuple[int, int]] = set()
+        self.enemy_hits: set[tuple[int, int]] = set()
+        self.enemy_misses: set[tuple[int, int]] = set()
 
-        self.hovered_cell: tuple[int, int] | None = None
+        self.turn = "player"
+        self.moves = 0
+        self.enemy_think_timer = 0.0
 
     def enter(self) -> None:
-        self.title_font = pygame.font.SysFont("arial", theme.HEADING_SIZE, bold=True)
-        self.info_font = pygame.font.SysFont("arial", theme.BODY_SIZE)
-        self.small_font = pygame.font.SysFont("arial", theme.CAPTION_SIZE, bold=True)
-
-        # Ensure the default starting mode is fully initialized.
-        # This fixes the bug where PvC could start without enemy ships placed.
-        self.logic.set_mode(self.logic.vs_computer)
-        self.hovered_cell = None
+        self.ui = GameUI()
+        self.mode_font = pygame.font.SysFont("arial", 18, bold=True)
+        self.reset_game()
 
     def rebuild_layout(self, screen: pygame.Surface) -> None:
-        self.left_board_rect = pygame.Rect(150, 230, 420, 420)
-        self.right_board_rect = pygame.Rect(screen.get_width() - 570, 230, 420, 420)
+        self.play_rect = pygame.Rect((screen.get_width() - 1120) // 2, 165, 1120, 640)
+        board_size = self.GRID_SIZE * self.CELL_SIZE
+        gap = 100
 
-        self.pvp_button = pygame.Rect(screen.get_width() // 2 - 210, 115, 180, 44)
-        self.pvc_button = pygame.Rect(screen.get_width() // 2 + 30, 115, 180, 44)
+        self.player_board_rect = pygame.Rect(
+            self.play_rect.centerx - gap // 2 - board_size,
+            self.play_rect.top + 120,
+            board_size,
+            board_size,
+        )
+        self.enemy_board_rect = pygame.Rect(
+            self.play_rect.centerx + gap // 2,
+            self.play_rect.top + 120,
+            board_size,
+            board_size,
+        )
 
-        self.left_cells = self.build_cell_grid(self.left_board_rect)
-        self.right_cells = self.build_cell_grid(self.right_board_rect)
+        self.pvp_button = pygame.Rect(self.play_rect.centerx - 190, self.play_rect.top + 28, 170, 40)
+        self.pvc_button = pygame.Rect(self.play_rect.centerx + 20, self.play_rect.top + 28, 170, 40)
 
-    def build_cell_grid(self, rect: pygame.Rect) -> list[list[pygame.Rect]]:
-        padding = 6
-        cell_size = (rect.width - padding * 9) // 8
-        grid: list[list[pygame.Rect]] = []
+    def reset_game(self) -> None:
+        screen = pygame.display.get_surface()
+        if screen is not None:
+            self.rebuild_layout(screen)
 
-        for row in range(8):
-            row_rects = []
-            for col in range(8):
-                x = rect.x + padding + col * (cell_size + padding)
-                y = rect.y + padding + row * (cell_size + padding)
-                row_rects.append(pygame.Rect(x, y, cell_size, cell_size))
-            grid.append(row_rects)
+        self.paused = False
+        self.completed = False
+        self.winner_text = ""
+        self.turn = "player"
+        self.moves = 0
+        self.enemy_think_timer = 0.5
 
-        return grid
+        self.state = self.STATE_PLACEMENT
+        self.placement_index = 0
+        self.placement_horizontal = True
+        self.hover_cell = None
 
-    def status_text(self) -> str:
-        if self.logic.phase == "placement":
-            player_label = "Player 1" if self.logic.placement_player == 1 else "Player 2"
-            size = self.logic.current_ship_size()
-            orientation = "Horizontal" if self.logic.placement_orientation == "horizontal" else "Vertical"
-            return f"{player_label}: place ship of size {size} ({orientation})"
+        self.player_hits.clear()
+        self.player_misses.clear()
+        self.enemy_hits.clear()
+        self.enemy_misses.clear()
 
-        if self.logic.winner == 1:
-            return "Winner: Player 1"
-        if self.logic.winner == 2:
-            return "Winner: Computer" if self.logic.vs_computer else "Winner: Player 2"
+        self.player_ships = []
+        self.enemy_ships = self.generate_fleet()
 
-        if self.logic.current_player == 1:
-            return "Player 1 turn"
-        return "Computer turn" if self.logic.vs_computer else "Player 2 turn"
+    def set_mode(self, vs_computer: bool) -> None:
+        self.vs_computer = vs_computer
+        self.reset_game()
 
-    def draw_mode_button(self, screen: pygame.Surface, rect: pygame.Rect, label: str, selected: bool) -> None:
-        fill = theme.SURFACE_ALT if selected else theme.SURFACE
-        border = theme.ACCENT if selected else theme.SURFACE_ALT
+    def get_persistence_payload(self) -> dict:
+        payload = super().get_persistence_payload()
+        payload["score"] = len(self.player_hits) * 100
+        payload["round"] = self.moves
+        return payload
 
-        pygame.draw.rect(screen, fill, rect, border_radius=theme.RADIUS_MEDIUM)
-        pygame.draw.rect(screen, border, rect, width=3, border_radius=theme.RADIUS_MEDIUM)
+    def leave_to_menu(self) -> None:
+        from arcade_app.scenes.game_select_scene import GameSelectScene
+        self.app.scene_manager.go_to(GameSelectScene(self.app))
 
-        assert self.small_font is not None
-        text = self.small_font.render(label, True, theme.TEXT)
-        screen.blit(text, text.get_rect(center=rect.center))
+    def generate_fleet(self) -> list[set[tuple[int, int]]]:
+        ships: list[set[tuple[int, int]]] = []
 
-    def get_hover_preview_cells(self) -> list[tuple[int, int]]:
-        if self.logic.phase != "placement" or self.hovered_cell is None:
-            return []
-
-        row, col = self.hovered_cell
-        size = self.logic.current_ship_size()
-        if size is None:
-            return []
-
-        cells: list[tuple[int, int]] = []
-
-        if self.logic.placement_orientation == "horizontal":
-            for c in range(col, col + size):
-                if 0 <= c < self.logic.BOARD_SIZE:
-                    cells.append((row, c))
+        for size in self.SHIP_SIZES:
+            placed = False
+            while not placed:
+                horizontal = random.choice([True, False])
+                if horizontal:
+                    row = random.randint(0, self.GRID_SIZE - 1)
+                    col = random.randint(0, self.GRID_SIZE - size)
+                    ship = {(row, col + i) for i in range(size)}
                 else:
-                    return []
-        else:
-            for r in range(row, row + size):
-                if 0 <= r < self.logic.BOARD_SIZE:
-                    cells.append((r, col))
-                else:
-                    return []
+                    row = random.randint(0, self.GRID_SIZE - size)
+                    col = random.randint(0, self.GRID_SIZE - 1)
+                    ship = {(row + i, col) for i in range(size)}
+
+                if all(ship.isdisjoint(existing) for existing in ships):
+                    ships.append(ship)
+                    placed = True
+
+        return ships
+
+    def board_cell_at(self, pos: tuple[int, int], board_rect: pygame.Rect) -> tuple[int, int] | None:
+        if not board_rect.collidepoint(pos):
+            return None
+        col = (pos[0] - board_rect.x) // self.CELL_SIZE
+        row = (pos[1] - board_rect.y) // self.CELL_SIZE
+        return int(row), int(col)
+
+    def ship_at(self, ships: list[set[tuple[int, int]]], cell: tuple[int, int]) -> set[tuple[int, int]] | None:
+        for ship in ships:
+            if cell in ship:
+                return ship
+        return None
+
+    def all_sunk(self, ships: list[set[tuple[int, int]]], hits: set[tuple[int, int]]) -> bool:
+        return all(all(cell in hits for cell in ship) for ship in ships)
+
+    def current_ship_size(self) -> int | None:
+        if self.placement_index >= len(self.SHIP_SIZES):
+            return None
+        return self.SHIP_SIZES[self.placement_index]
+
+    def build_ship_cells(self, start: tuple[int, int], size: int, horizontal: bool) -> set[tuple[int, int]] | None:
+        row, col = start
+        cells: set[tuple[int, int]] = set()
+
+        for i in range(size):
+            r = row
+            c = col + i if horizontal else col
+            if not horizontal:
+                r = row + i
+
+            if not (0 <= r < self.GRID_SIZE and 0 <= c < self.GRID_SIZE):
+                return None
+            cells.add((r, c))
 
         return cells
 
-    def can_place_hover_preview(self) -> bool:
-        if self.logic.phase != "placement" or self.hovered_cell is None:
-            return False
+    def can_place_ship(self, ship: set[tuple[int, int]]) -> bool:
+        return all(ship.isdisjoint(existing) for existing in self.player_ships)
 
-        row, col = self.hovered_cell
-        size = self.logic.current_ship_size()
+    def place_current_ship(self, start: tuple[int, int]) -> None:
+        if self.state != self.STATE_PLACEMENT or self.completed:
+            return
+
+        size = self.current_ship_size()
         if size is None:
-            return False
+            return
 
-        board = self.logic.get_active_board_for_placement()
-        return self.logic.can_place_ship(board, row, col, size, self.logic.placement_orientation)
+        ship = self.build_ship_cells(start, size, self.placement_horizontal)
+        if ship is None or not self.can_place_ship(ship):
+            return
+
+        self.player_ships.append(ship)
+        self.placement_index += 1
+
+        if self.placement_index >= len(self.SHIP_SIZES):
+            self.state = self.STATE_BATTLE
+            self.turn = "player"
+
+    def undo_last_ship(self) -> None:
+        if self.state != self.STATE_PLACEMENT or not self.player_ships:
+            return
+        self.player_ships.pop()
+        self.placement_index = max(0, self.placement_index - 1)
+
+    def fire_at_enemy(self, cell: tuple[int, int]) -> None:
+        if self.completed or self.paused or self.state != self.STATE_BATTLE or self.turn != "player":
+            return
+        if cell in self.player_hits or cell in self.player_misses:
+            return
+
+        self.moves += 1
+        ship = self.ship_at(self.enemy_ships, cell)
+        if ship is not None:
+            self.player_hits.add(cell)
+            if self.all_sunk(self.enemy_ships, self.player_hits):
+                self.completed = True
+                self.winner_text = "Player Wins"
+                return
+        else:
+            self.player_misses.add(cell)
+
+        self.turn = "enemy"
+
+    def enemy_move(self) -> None:
+        available = [
+            (r, c)
+            for r in range(self.GRID_SIZE)
+            for c in range(self.GRID_SIZE)
+            if (r, c) not in self.enemy_hits and (r, c) not in self.enemy_misses
+        ]
+        if not available:
+            return
+
+        cell = random.choice(available)
+        ship = self.ship_at(self.player_ships, cell)
+        if ship is not None:
+            self.enemy_hits.add(cell)
+            if self.all_sunk(self.player_ships, self.enemy_hits):
+                self.completed = True
+                self.winner_text = "Enemy Wins"
+                return
+        else:
+            self.enemy_misses.add(cell)
+
+        self.turn = "player"
+
+    def draw_mode_button(self, screen: pygame.Surface, rect: pygame.Rect, label: str, selected: bool) -> None:
+        assert self.mode_font is not None
+        fill = theme.SURFACE_ALT if selected else theme.SURFACE
+        border = theme.ACCENT if selected else theme.SURFACE_ALT
+        pygame.draw.rect(screen, fill, rect, border_radius=10)
+        pygame.draw.rect(screen, border, rect, width=2, border_radius=10)
+        surface = self.mode_font.render(label, True, theme.TEXT)
+        screen.blit(surface, surface.get_rect(center=rect.center))
+
+    def handle_events(self, events: list[pygame.event.Event]) -> None:
+        mouse_pos = pygame.mouse.get_pos()
+        self.hover_cell = self.board_cell_at(mouse_pos, self.player_board_rect) if self.state == self.STATE_PLACEMENT else None
+
+        for event in events:
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    self.leave_to_menu()
+                elif event.key == pygame.K_p and not self.completed and self.state == self.STATE_BATTLE:
+                    self.paused = not self.paused
+                elif event.key == pygame.K_F5:
+                    self.reset_game()
+                elif self.completed and event.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER):
+                    self.reset_game()
+                elif self.state == self.STATE_PLACEMENT:
+                    if event.key == pygame.K_r:
+                        self.placement_horizontal = not self.placement_horizontal
+                    elif event.key in (pygame.K_BACKSPACE, pygame.K_DELETE):
+                        self.undo_last_ship()
+
+            elif event.type == pygame.MOUSEMOTION:
+                self.hover_cell = self.board_cell_at(event.pos, self.player_board_rect) if self.state == self.STATE_PLACEMENT else None
+
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:
+                    if self.pvp_button.collidepoint(event.pos):
+                        self.set_mode(False)
+                        return
+                    if self.pvc_button.collidepoint(event.pos):
+                        self.set_mode(True)
+                        return
+
+                    if self.completed:
+                        self.reset_game()
+                        continue
+                    if self.paused:
+                        continue
+
+                    if self.state == self.STATE_PLACEMENT:
+                        cell = self.board_cell_at(event.pos, self.player_board_rect)
+                        if cell is not None:
+                            self.place_current_ship(cell)
+                    else:
+                        target = self.board_cell_at(event.pos, self.enemy_board_rect)
+                        if target is not None:
+                            self.fire_at_enemy(target)
+
+                elif event.button == 3 and self.state == self.STATE_PLACEMENT:
+                    self.placement_horizontal = not self.placement_horizontal
+
+    def update(self, dt: float) -> None:
+        screen = pygame.display.get_surface()
+        if screen is not None:
+            self.rebuild_layout(screen)
+
+        if self.paused or self.completed or self.state != self.STATE_BATTLE:
+            return
+
+        if self.vs_computer and self.turn == "enemy":
+            self.enemy_think_timer -= dt
+            if self.enemy_think_timer <= 0:
+                self.enemy_move()
+                self.enemy_think_timer = 0.5
 
     def draw_board(
         self,
         screen: pygame.Surface,
-        board_rect: pygame.Rect,
-        cells: list[list[pygame.Rect]],
-        ship_board: list[list[int]],
-        shot_board: list[list[int]],
+        rect: pygame.Rect,
+        ships: list[set[tuple[int, int]]],
+        hits: set[tuple[int, int]],
+        misses: set[tuple[int, int]],
         reveal_ships: bool,
-        preview_cells: list[tuple[int, int]] | None = None,
-        preview_valid: bool = True,
     ) -> None:
-        assert self.small_font is not None
+        pygame.draw.rect(screen, theme.SURFACE, rect, border_radius=theme.RADIUS_MEDIUM)
+        pygame.draw.rect(screen, theme.SURFACE_ALT, rect, width=2, border_radius=theme.RADIUS_MEDIUM)
 
-        pygame.draw.rect(screen, theme.SURFACE, board_rect, border_radius=theme.RADIUS_MEDIUM)
+        for r in range(self.GRID_SIZE):
+            for c in range(self.GRID_SIZE):
+                cell_rect = pygame.Rect(
+                    rect.x + c * self.CELL_SIZE,
+                    rect.y + r * self.CELL_SIZE,
+                    self.CELL_SIZE,
+                    self.CELL_SIZE,
+                )
+                pygame.draw.rect(screen, theme.SURFACE_ALT, cell_rect, width=1, border_radius=2)
 
-        preview_set = set(preview_cells or [])
+                cell = (r, c)
+                ship = self.ship_at(ships, cell)
 
-        for row in range(8):
-            for col in range(8):
-                rect = cells[row][col]
+                if reveal_ships and ship is not None and cell not in hits:
+                    inner = cell_rect.inflate(-8, -8)
+                    pygame.draw.rect(screen, (90, 110, 145), inner, border_radius=6)
 
-                fill = theme.SURFACE_ALT
+                if cell in misses:
+                    pygame.draw.circle(screen, theme.MUTED_TEXT, cell_rect.center, 6)
+                elif cell in hits:
+                    pygame.draw.circle(screen, theme.DANGER, cell_rect.center, 12)
+                    pygame.draw.line(screen, theme.TEXT, (cell_rect.left + 10, cell_rect.top + 10), (cell_rect.right - 10, cell_rect.bottom - 10), 3)
+                    pygame.draw.line(screen, theme.TEXT, (cell_rect.right - 10, cell_rect.top + 10), (cell_rect.left + 10, cell_rect.bottom - 10), 3)
 
-                if reveal_ships and ship_board[row][col] == 1:
-                    fill = (90, 120, 170)
+    def draw_placement_preview(self, screen: pygame.Surface) -> None:
+        if self.state != self.STATE_PLACEMENT or self.hover_cell is None:
+            return
 
-                if shot_board[row][col] == 1:
-                    fill = (120, 120, 130)
-                elif shot_board[row][col] == 2:
-                    fill = theme.DANGER
+        size = self.current_ship_size()
+        if size is None:
+            return
 
-                pygame.draw.rect(screen, fill, rect, border_radius=theme.RADIUS_SMALL)
+        ship = self.build_ship_cells(self.hover_cell, size, self.placement_horizontal)
+        if ship is None:
+            return
 
-                if (row, col) in preview_set:
-                    overlay = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
-                    overlay.fill((100, 220, 140, 110) if preview_valid else (220, 90, 90, 110))
-                    screen.blit(overlay, rect.topleft)
+        valid = self.can_place_ship(ship)
+        color = theme.ACCENT if valid else theme.DANGER
 
-                if shot_board[row][col] == 1:
-                    text = self.small_font.render("•", True, theme.TEXT)
-                    screen.blit(text, text.get_rect(center=rect.center))
-                elif shot_board[row][col] == 2:
-                    text = self.small_font.render("X", True, theme.TEXT)
-                    screen.blit(text, text.get_rect(center=rect.center))
-
-    def handle_events(self, events: list[pygame.event.Event]) -> None:
-        for event in events:
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    from arcade_app.scenes.game_select_scene import GameSelectScene
-                    self.app.scene_manager.go_to(GameSelectScene(self.app))
-                elif event.key == pygame.K_F5:
-                    current_mode = self.logic.vs_computer
-                    self.logic.set_mode(current_mode)
-                    self.hovered_cell = None
-                elif event.key == pygame.K_1:
-                    self.logic.set_mode(False)
-                    self.hovered_cell = None
-                elif event.key == pygame.K_2:
-                    self.logic.set_mode(True)
-                    self.hovered_cell = None
-                elif event.key == pygame.K_r and self.logic.phase == "placement":
-                    self.logic.placement_orientation = (
-                        "vertical" if self.logic.placement_orientation == "horizontal" else "horizontal"
-                    )
-
-            elif event.type == pygame.MOUSEMOTION:
-                self.hovered_cell = None
-                if self.logic.phase == "placement":
-                    target_cells = self.left_cells if self.logic.placement_player == 1 else self.right_cells
-                    for row in range(8):
-                        for col in range(8):
-                            if target_cells[row][col].collidepoint(event.pos):
-                                self.hovered_cell = (row, col)
-                                return
-
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                mouse_pos = event.pos
-
-                if self.pvp_button.collidepoint(mouse_pos):
-                    self.logic.set_mode(False)
-                    self.hovered_cell = None
-                    return
-
-                if self.pvc_button.collidepoint(mouse_pos):
-                    self.logic.set_mode(True)
-                    self.hovered_cell = None
-                    return
-
-                if self.logic.phase == "placement":
-                    target_cells = self.left_cells if self.logic.placement_player == 1 else self.right_cells
-                    for row in range(8):
-                        for col in range(8):
-                            if target_cells[row][col].collidepoint(mouse_pos):
-                                self.logic.place_next_ship(row, col)
-                                return
-
-                elif self.logic.phase == "battle" and self.logic.current_player == 1 and self.logic.winner is None:
-                    for row in range(8):
-                        for col in range(8):
-                            if self.right_cells[row][col].collidepoint(mouse_pos):
-                                self.logic.attack(row, col)
-                                return
-
-    def update(self, dt: float) -> None:
-        if self.logic.vs_computer and self.logic.phase == "battle" and self.logic.current_player == 2:
-            self.logic.ai_take_turn()
+        for r, c in ship:
+            cell_rect = pygame.Rect(
+                self.player_board_rect.x + c * self.CELL_SIZE,
+                self.player_board_rect.y + r * self.CELL_SIZE,
+                self.CELL_SIZE,
+                self.CELL_SIZE,
+            ).inflate(-10, -10)
+            pygame.draw.rect(screen, color, cell_rect, width=3, border_radius=6)
 
     def render(self, screen: pygame.Surface) -> None:
-        assert self.title_font is not None
-        assert self.info_font is not None
-        assert self.small_font is not None
+        assert self.ui is not None
+        assert self.mode_font is not None
 
         self.rebuild_layout(screen)
         screen.fill(theme.BACKGROUND)
 
-        title = self.title_font.render("Battleships", True, theme.TEXT)
-        status = self.info_font.render(self.status_text(), True, theme.TEXT)
-        controls = self.info_font.render(
-            "Placement: Click to place, R to rotate  |  Battle: Click enemy grid  |  1: PvP  |  2: PvC  |  F5: Restart  |  Esc: Back",
-            True,
-            theme.MUTED_TEXT,
+        if self.state == self.STATE_PLACEMENT:
+            size = self.current_ship_size()
+            subtitle = (
+                f"Place ship {self.placement_index + 1}/{len(self.SHIP_SIZES)} "
+                f"(size {size}). Click to place, R or Right Click to rotate, Backspace to undo."
+                if size is not None
+                else "Placement complete."
+            )
+        else:
+            subtitle = "Click enemy cells to fire. Sink the opposing fleet before yours is destroyed."
+
+        self.ui.draw_header(screen, "Battleships", subtitle)
+        self.ui.draw_stats_row(
+            screen,
+            [
+                f"Mode: {'PvC' if self.vs_computer else 'PvP-lite'}",
+                f"Phase: {'Placement' if self.state == self.STATE_PLACEMENT else 'Battle'}",
+                f"Turn: {self.turn.title() if self.state == self.STATE_BATTLE and not self.completed else '--'}",
+                f"Shots: {self.moves}",
+            ],
         )
 
-        left_label = self.info_font.render("Player 1 Fleet", True, theme.TEXT)
-        right_label_text = "Enemy Fleet" if self.logic.vs_computer else "Player 2 Fleet"
-        right_label = self.info_font.render(right_label_text, True, theme.TEXT)
+        if self.completed:
+            sub = self.winner_text
+        elif self.state == self.STATE_PLACEMENT:
+            sub = f"Ships placed: {len(self.player_ships)}/{len(self.SHIP_SIZES)}  |  Orientation: {'Horizontal' if self.placement_horizontal else 'Vertical'}"
+        else:
+            sub = "Track hits, finish damaged ships, and avoid wasting shots."
+        self.ui.draw_sub_stats(screen, sub)
+        self.ui.draw_footer(
+            screen,
+            "Placement: Click place, R/Right Click rotate, Backspace undo  |  Battle: P Pause, F5 Restart, Esc Back"
+        )
 
-        screen.blit(title, title.get_rect(center=(screen.get_width() // 2, 32)))
-        screen.blit(status, status.get_rect(center=(screen.get_width() // 2, 78)))
+        self.draw_mode_button(screen, self.pvp_button, "Player vs Player", not self.vs_computer)
+        self.draw_mode_button(screen, self.pvc_button, "Player vs Computer", self.vs_computer)
 
-        self.draw_mode_button(screen, self.pvp_button, "Player vs Player", not self.logic.vs_computer)
-        self.draw_mode_button(screen, self.pvc_button, "Player vs Computer", self.logic.vs_computer)
+        left_label = self.mode_font.render("Your Fleet", True, theme.TEXT)
+        right_label = self.mode_font.render("Enemy Waters", True, theme.TEXT)
+        screen.blit(left_label, left_label.get_rect(center=(self.player_board_rect.centerx, self.player_board_rect.y - 22)))
+        screen.blit(right_label, right_label.get_rect(center=(self.enemy_board_rect.centerx, self.enemy_board_rect.y - 22)))
 
-        screen.blit(left_label, left_label.get_rect(center=(self.left_board_rect.centerx, 205)))
-        screen.blit(right_label, right_label.get_rect(center=(self.right_board_rect.centerx, 205)))
-        screen.blit(controls, controls.get_rect(center=(screen.get_width() // 2, screen.get_height() - 28)))
-
-        reveal_enemy_ships = not self.logic.vs_computer and self.logic.phase == "placement" and self.logic.placement_player == 2
-        reveal_enemy_battle = not self.logic.vs_computer and self.logic.winner is not None
-
-        preview_cells = self.get_hover_preview_cells()
-        preview_valid = self.can_place_hover_preview()
-
-        left_preview = preview_cells if self.logic.phase == "placement" and self.logic.placement_player == 1 else []
-        right_preview = preview_cells if self.logic.phase == "placement" and self.logic.placement_player == 2 else []
-
+        self.draw_board(screen, self.player_board_rect, self.player_ships, self.enemy_hits, self.enemy_misses, True)
         self.draw_board(
             screen,
-            self.left_board_rect,
-            self.left_cells,
-            self.logic.player_board,
-            self.logic.enemy_shots,
-            reveal_ships=True,
-            preview_cells=left_preview,
-            preview_valid=preview_valid,
+            self.enemy_board_rect,
+            self.enemy_ships,
+            self.player_hits,
+            self.player_misses,
+            self.completed,
         )
+        self.draw_placement_preview(screen)
 
-        self.draw_board(
-            screen,
-            self.right_board_rect,
-            self.right_cells,
-            self.logic.enemy_board,
-            self.logic.player_shots,
-            reveal_ships=reveal_enemy_ships or reveal_enemy_battle,
-            preview_cells=right_preview,
-            preview_valid=preview_valid,
-        )
+        if self.paused and not self.completed:
+            self.ui.draw_pause_overlay(screen, self.play_rect)
+
+        if self.completed:
+            self.ui.draw_game_over(
+                screen,
+                self.play_rect,
+                self.winner_text or "Match Over",
+                f"Shots Taken: {self.moves}",
+                f"Enemy Hits: {len(self.enemy_hits)}  |  Player Hits: {len(self.player_hits)}",
+            )

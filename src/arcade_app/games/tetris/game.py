@@ -6,318 +6,459 @@ import pygame
 
 from arcade_app.core.game_base import GameBase
 from arcade_app.ui import theme
+from arcade_app.ui.game_ui import GameUI
 
 
 class TetrisGame(GameBase):
     game_id = "tetris"
     title = "Tetris"
 
+    BOARD_WIDTH = 10
+    BOARD_HEIGHT = 20
+    CELL_SIZE = 30
+
+    MOVE_REPEAT_DELAY = 0.15
+    MOVE_REPEAT_INTERVAL = 0.06
+    SOFT_DROP_MULTIPLIER = 10.0
+
     SHAPES = {
         "I": [[1, 1, 1, 1]],
         "O": [[1, 1], [1, 1]],
         "T": [[0, 1, 0], [1, 1, 1]],
-        "L": [[1, 0], [1, 0], [1, 1]],
-        "J": [[0, 1], [0, 1], [1, 1]],
         "S": [[0, 1, 1], [1, 1, 0]],
         "Z": [[1, 1, 0], [0, 1, 1]],
+        "J": [[1, 0, 0], [1, 1, 1]],
+        "L": [[0, 0, 1], [1, 1, 1]],
     }
 
-    COLORS = {
-        "I": (100, 220, 220),
-        "O": (230, 210, 90),
-        "T": (180, 120, 230),
-        "L": (230, 150, 90),
-        "J": (100, 140, 230),
-        "S": (120, 210, 120),
-        "Z": (220, 100, 100),
+    SHAPE_COLORS = {
+        "I": (80, 220, 220),
+        "O": (240, 220, 90),
+        "T": (190, 120, 240),
+        "S": (110, 210, 120),
+        "Z": (230, 90, 90),
+        "J": (90, 140, 230),
+        "L": (240, 160, 80),
     }
 
     def __init__(self, app) -> None:
         super().__init__(app)
 
-        self.title_font: pygame.font.Font | None = None
-        self.info_font: pygame.font.Font | None = None
+        self.ui: GameUI | None = None
 
-        self.rows = 20
-        self.cols = 10
-        self.cell_size = 28
-
-        self.board_rect = pygame.Rect(0, 0, self.cols * self.cell_size, self.rows * self.cell_size)
+        self.play_rect = pygame.Rect(0, 0, 1100, 640)
+        self.board_rect = pygame.Rect(0, 0, self.BOARD_WIDTH * self.CELL_SIZE, self.BOARD_HEIGHT * self.CELL_SIZE)
         self.next_rect = pygame.Rect(0, 0, 180, 180)
 
-        self.grid: list[list[tuple[int, int, int] | None]] = []
-
-        self.current_shape: list[list[int]] = []
-        self.current_color: tuple[int, int, int] = theme.ACCENT
-        self.current_x = 0
-        self.current_y = 0
-
-        self.next_piece_name = ""
-        self.next_shape: list[list[int]] = []
-        self.next_color: tuple[int, int, int] = theme.ACCENT
-
-        self.drop_timer = 0.0
-        self.drop_delay = 0.55
-        self.soft_drop_multiplier = 8.0
-
-        self.horizontal_hold_timer = 0.0
-        self.horizontal_repeat_delay = 0.10
+        self.board: list[list[tuple[int, int, int] | None]] = []
+        self.current_piece: dict | None = None
+        self.next_piece: dict | None = None
 
         self.score = 0
-        self.lines_cleared = 0
-        self.is_game_over = False
+        self.lines = 0
+        self.level = 1
+
+        self.fall_timer = 0.0
+
+        self.game_over = False
+        self.paused = False
+
+        self.left_held = False
+        self.right_held = False
+        self.soft_drop_held = False
+
+        self.left_repeat_timer = 0.0
+        self.right_repeat_timer = 0.0
 
     def enter(self) -> None:
-        self.title_font = pygame.font.SysFont("arial", theme.HEADING_SIZE, bold=True)
-        self.info_font = pygame.font.SysFont("arial", theme.BODY_SIZE)
+        self.ui = GameUI()
         self.reset_game()
 
-    def reset_game(self) -> None:
-        self.grid = [[None for _ in range(self.cols)] for _ in range(self.rows)]
-        self.score = 0
-        self.lines_cleared = 0
-        self.is_game_over = False
-        self.drop_timer = 0.0
-        self.horizontal_hold_timer = 0.0
-
-        self.roll_next_piece()
-        self.spawn_piece()
-
     def rebuild_layout(self, screen: pygame.Surface) -> None:
+        self.play_rect = pygame.Rect(
+            (screen.get_width() - 1100) // 2,
+            165,
+            1100,
+            640,
+        )
         self.board_rect = pygame.Rect(
-            (screen.get_width() - self.cols * self.cell_size) // 2 - 60,
-            150,
-            self.cols * self.cell_size,
-            self.rows * self.cell_size,
+            self.play_rect.left + 120,
+            self.play_rect.top + 20,
+            self.BOARD_WIDTH * self.CELL_SIZE,
+            self.BOARD_HEIGHT * self.CELL_SIZE,
         )
-
         self.next_rect = pygame.Rect(
-            self.board_rect.right + 40,
-            self.board_rect.y + 40,
+            self.board_rect.right + 90,
+            self.board_rect.top + 40,
             180,
             180,
         )
 
-    def roll_next_piece(self) -> None:
-        piece_name = random.choice(list(self.SHAPES.keys()))
-        self.next_piece_name = piece_name
-        self.next_shape = [row[:] for row in self.SHAPES[piece_name]]
-        self.next_color = self.COLORS[piece_name]
+    def reset_game(self) -> None:
+        screen = pygame.display.get_surface()
+        if screen is not None:
+            self.rebuild_layout(screen)
 
-    def spawn_piece(self) -> None:
-        self.current_shape = [row[:] for row in self.next_shape]
-        self.current_color = self.next_color
-        self.current_x = self.cols // 2 - len(self.current_shape[0]) // 2
-        self.current_y = 0
+        self.board = [[None for _ in range(self.BOARD_WIDTH)] for _ in range(self.BOARD_HEIGHT)]
+        self.score = 0
+        self.lines = 0
+        self.level = 1
+        self.fall_timer = 0.0
+        self.game_over = False
+        self.paused = False
 
-        self.roll_next_piece()
+        self.left_held = False
+        self.right_held = False
+        self.soft_drop_held = False
+        self.left_repeat_timer = 0.0
+        self.right_repeat_timer = 0.0
 
-        if self.collides(self.current_x, self.current_y, self.current_shape):
-            self.is_game_over = True
+        self.current_piece = self.create_piece()
+        self.next_piece = self.create_piece()
 
-    def collides(self, x: int, y: int, shape: list[list[int]]) -> bool:
-        for row_idx, row in enumerate(shape):
-            for col_idx, value in enumerate(row):
+        if not self.valid_position(self.current_piece, self.current_piece["x"], self.current_piece["y"]):
+            self.game_over = True
+
+    def get_persistence_payload(self) -> dict:
+        payload = super().get_persistence_payload()
+        payload["lines"] = self.lines
+        payload["round"] = self.level
+        return payload
+
+    def create_piece(self) -> dict:
+        kind = random.choice(list(self.SHAPES.keys()))
+        shape = [row[:] for row in self.SHAPES[kind]]
+        width = len(shape[0])
+        return {
+            "kind": kind,
+            "shape": shape,
+            "color": self.SHAPE_COLORS[kind],
+            "x": self.BOARD_WIDTH // 2 - width // 2,
+            "y": 0,
+        }
+
+    def valid_position(self, piece: dict, x: int, y: int, shape: list[list[int]] | None = None) -> bool:
+        test_shape = shape if shape is not None else piece["shape"]
+
+        for row_index, row in enumerate(test_shape):
+            for col_index, value in enumerate(row):
                 if not value:
                     continue
 
-                board_x = x + col_idx
-                board_y = y + row_idx
+                board_x = x + col_index
+                board_y = y + row_index
 
-                if board_x < 0 or board_x >= self.cols or board_y >= self.rows:
-                    return True
+                if board_x < 0 or board_x >= self.BOARD_WIDTH:
+                    return False
+                if board_y >= self.BOARD_HEIGHT:
+                    return False
+                if board_y >= 0 and self.board[board_y][board_x] is not None:
+                    return False
 
-                if board_y >= 0 and self.grid[board_y][board_x] is not None:
-                    return True
+        return True
+
+    def rotate_shape(self, shape: list[list[int]]) -> list[list[int]]:
+        return [list(row) for row in zip(*shape[::-1])]
+
+    def hard_drop(self) -> None:
+        if self.current_piece is None or self.game_over or self.paused:
+            return
+
+        while self.valid_position(self.current_piece, self.current_piece["x"], self.current_piece["y"] + 1):
+            self.current_piece["y"] += 1
+            self.score += 2
+
+        self.lock_piece()
+
+    def rotate_piece(self) -> None:
+        if self.current_piece is None or self.game_over or self.paused:
+            return
+
+        rotated = self.rotate_shape(self.current_piece["shape"])
+        px = self.current_piece["x"]
+        py = self.current_piece["y"]
+
+        for offset in (0, -1, 1, -2, 2):
+            if self.valid_position(self.current_piece, px + offset, py, rotated):
+                self.current_piece["shape"] = rotated
+                self.current_piece["x"] = px + offset
+                return
+
+    def move_piece(self, dx: int, dy: int) -> bool:
+        if self.current_piece is None:
+            return False
+
+        new_x = self.current_piece["x"] + dx
+        new_y = self.current_piece["y"] + dy
+
+        if self.valid_position(self.current_piece, new_x, new_y):
+            self.current_piece["x"] = new_x
+            self.current_piece["y"] = new_y
+            return True
 
         return False
 
     def lock_piece(self) -> None:
-        for row_idx, row in enumerate(self.current_shape):
-            for col_idx, value in enumerate(row):
-                if value:
-                    board_x = self.current_x + col_idx
-                    board_y = self.current_y + row_idx
-                    if 0 <= board_y < self.rows:
-                        self.grid[board_y][board_x] = self.current_color
+        if self.current_piece is None:
+            return
 
-        self.clear_lines()
-        self.spawn_piece()
+        for row_index, row in enumerate(self.current_piece["shape"]):
+            for col_index, value in enumerate(row):
+                if not value:
+                    continue
+                board_x = self.current_piece["x"] + col_index
+                board_y = self.current_piece["y"] + row_index
+                if 0 <= board_y < self.BOARD_HEIGHT:
+                    self.board[board_y][board_x] = self.current_piece["color"]
 
-    def clear_lines(self) -> None:
-        new_grid = []
-        cleared = 0
+        cleared = self.clear_lines()
+        if cleared > 0:
+            self.lines += cleared
+            self.level = 1 + self.lines // 10
+            self.score += {1: 100, 2: 300, 3: 500, 4: 800}.get(cleared, cleared * 200) * self.level
 
-        for row in self.grid:
-            if all(cell is not None for cell in row):
-                cleared += 1
-            else:
-                new_grid.append(row)
+        self.current_piece = self.next_piece
+        self.next_piece = self.create_piece()
+        self.fall_timer = 0.0
 
-        while len(new_grid) < self.rows:
-            new_grid.insert(0, [None for _ in range(self.cols)])
+        if self.current_piece is not None and not self.valid_position(self.current_piece, self.current_piece["x"], self.current_piece["y"]):
+            self.game_over = True
 
-        self.grid = new_grid
-        self.lines_cleared += cleared
-        self.score += cleared * 100
+    def clear_lines(self) -> int:
+        remaining_rows = [row for row in self.board if any(cell is None for cell in row)]
+        cleared = self.BOARD_HEIGHT - len(remaining_rows)
 
-    def move_piece(self, dx: int, dy: int) -> bool:
-        new_x = self.current_x + dx
-        new_y = self.current_y + dy
+        while len(remaining_rows) < self.BOARD_HEIGHT:
+            remaining_rows.insert(0, [None for _ in range(self.BOARD_WIDTH)])
 
-        if not self.collides(new_x, new_y, self.current_shape):
-            self.current_x = new_x
-            self.current_y = new_y
-            return True
-        return False
+        self.board = remaining_rows
+        return cleared
 
-    def rotate_piece(self) -> None:
-        rotated = [list(row) for row in zip(*self.current_shape[::-1])]
-        if not self.collides(self.current_x, self.current_y, rotated):
-            self.current_shape = rotated
+    def current_fall_delay(self) -> float:
+        return max(0.08, 0.62 - (self.level - 1) * 0.045)
+
+    def leave_to_menu(self) -> None:
+        from arcade_app.scenes.game_select_scene import GameSelectScene
+
+        self.app.scene_manager.go_to(GameSelectScene(self.app))
+
+    def start_left_hold(self) -> None:
+        moved = self.move_piece(-1, 0)
+        self.left_held = True
+        self.right_held = False
+        self.left_repeat_timer = self.MOVE_REPEAT_DELAY if moved else self.MOVE_REPEAT_INTERVAL
+        self.right_repeat_timer = 0.0
+
+    def start_right_hold(self) -> None:
+        moved = self.move_piece(1, 0)
+        self.right_held = True
+        self.left_held = False
+        self.right_repeat_timer = self.MOVE_REPEAT_DELAY if moved else self.MOVE_REPEAT_INTERVAL
+        self.left_repeat_timer = 0.0
+
+    def stop_left_hold(self) -> None:
+        self.left_held = False
+        self.left_repeat_timer = 0.0
+
+    def stop_right_hold(self) -> None:
+        self.right_held = False
+        self.right_repeat_timer = 0.0
+
+    def stop_soft_drop(self) -> None:
+        self.soft_drop_held = False
+
+    def update_horizontal_repeat(self, dt: float) -> None:
+        if self.left_held:
+            self.left_repeat_timer -= dt
+            while self.left_repeat_timer <= 0:
+                moved = self.move_piece(-1, 0)
+                self.left_repeat_timer += self.MOVE_REPEAT_INTERVAL
+                if not moved:
+                    self.left_repeat_timer = self.MOVE_REPEAT_INTERVAL
+                    break
+
+        if self.right_held:
+            self.right_repeat_timer -= dt
+            while self.right_repeat_timer <= 0:
+                moved = self.move_piece(1, 0)
+                self.right_repeat_timer += self.MOVE_REPEAT_INTERVAL
+                if not moved:
+                    self.right_repeat_timer = self.MOVE_REPEAT_INTERVAL
+                    break
 
     def handle_events(self, events: list[pygame.event.Event]) -> None:
         for event in events:
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
-                    from arcade_app.scenes.game_select_scene import GameSelectScene
-                    self.app.scene_manager.go_to(GameSelectScene(self.app))
+                    self.leave_to_menu()
+                elif event.key == pygame.K_p and not self.game_over:
+                    self.paused = not self.paused
                 elif event.key == pygame.K_F5:
                     self.reset_game()
-                elif not self.is_game_over:
+                elif self.game_over and event.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER):
+                    self.reset_game()
+                elif not self.paused and not self.game_over:
                     if event.key in (pygame.K_LEFT, pygame.K_a):
-                        self.move_piece(-1, 0)
-                        self.horizontal_hold_timer = 0.0
+                        self.start_left_hold()
                     elif event.key in (pygame.K_RIGHT, pygame.K_d):
-                        self.move_piece(1, 0)
-                        self.horizontal_hold_timer = 0.0
+                        self.start_right_hold()
                     elif event.key in (pygame.K_DOWN, pygame.K_s):
-                        if not self.move_piece(0, 1):
-                            self.lock_piece()
-                    elif event.key in (pygame.K_UP, pygame.K_w, pygame.K_SPACE):
+                        self.soft_drop_held = True
+                        if self.move_piece(0, 1):
+                            self.score += 1
+                    elif event.key in (pygame.K_UP, pygame.K_q, pygame.K_e):
                         self.rotate_piece()
+                    elif event.key == pygame.K_SPACE:
+                        self.hard_drop()
 
-    def update_horizontal_hold(self, dt: float) -> None:
-        keys = pygame.key.get_pressed()
-        left_held = keys[pygame.K_LEFT] or keys[pygame.K_a]
-        right_held = keys[pygame.K_RIGHT] or keys[pygame.K_d]
-
-        if left_held ^ right_held:
-            self.horizontal_hold_timer += dt
-            if self.horizontal_hold_timer >= self.horizontal_repeat_delay:
-                self.horizontal_hold_timer = 0.0
-                if left_held:
-                    self.move_piece(-1, 0)
-                elif right_held:
-                    self.move_piece(1, 0)
-        else:
-            self.horizontal_hold_timer = 0.0
+            elif event.type == pygame.KEYUP:
+                if event.key in (pygame.K_LEFT, pygame.K_a):
+                    self.stop_left_hold()
+                elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                    self.stop_right_hold()
+                elif event.key in (pygame.K_DOWN, pygame.K_s):
+                    self.stop_soft_drop()
 
     def update(self, dt: float) -> None:
         screen = pygame.display.get_surface()
         if screen is not None:
             self.rebuild_layout(screen)
 
-        if self.is_game_over:
+        if self.paused or self.game_over or self.current_piece is None:
             return
 
-        self.update_horizontal_hold(dt)
+        self.update_horizontal_repeat(dt)
 
-        keys = pygame.key.get_pressed()
-        effective_drop_delay = self.drop_delay
-        if keys[pygame.K_DOWN] or keys[pygame.K_s]:
-            effective_drop_delay = self.drop_delay / self.soft_drop_multiplier
+        fall_speed = self.SOFT_DROP_MULTIPLIER if self.soft_drop_held else 1.0
+        self.fall_timer += dt * fall_speed
 
-        self.drop_timer += dt
-        if self.drop_timer >= effective_drop_delay:
-            self.drop_timer = 0.0
-            if not self.move_piece(0, 1):
+        fall_delay = self.current_fall_delay()
+        while self.fall_timer >= fall_delay:
+            self.fall_timer -= fall_delay
+            moved = self.move_piece(0, 1)
+            if moved:
+                if self.soft_drop_held:
+                    self.score += 1
+            else:
                 self.lock_piece()
+                break
 
-    def draw_cell(
-        self,
-        screen: pygame.Surface,
-        x: int,
-        y: int,
-        size: int,
-        color: tuple[int, int, int],
-    ) -> None:
-        rect = pygame.Rect(x, y, size, size)
-        pygame.draw.rect(screen, color, rect, border_radius=4)
-        pygame.draw.rect(screen, theme.BACKGROUND, rect, width=1, border_radius=4)
+    def draw_board(self, screen: pygame.Surface) -> None:
+        pygame.draw.rect(screen, theme.SURFACE, self.board_rect, border_radius=theme.RADIUS_MEDIUM)
+        pygame.draw.rect(screen, theme.SURFACE_ALT, self.board_rect, width=2, border_radius=theme.RADIUS_MEDIUM)
 
-    def render_next_piece(self, screen: pygame.Surface) -> None:
-        assert self.info_font is not None
+        for row in range(self.BOARD_HEIGHT):
+            for col in range(self.BOARD_WIDTH):
+                cell_rect = pygame.Rect(
+                    self.board_rect.x + col * self.CELL_SIZE,
+                    self.board_rect.y + row * self.CELL_SIZE,
+                    self.CELL_SIZE,
+                    self.CELL_SIZE,
+                )
+                pygame.draw.rect(screen, theme.SURFACE_ALT, cell_rect, width=1, border_radius=3)
 
-        label = self.info_font.render("Next", True, theme.TEXT)
-        screen.blit(label, label.get_rect(midbottom=(self.next_rect.centerx, self.next_rect.y - 8)))
+                cell = self.board[row][col]
+                if cell is not None:
+                    inner = cell_rect.inflate(-4, -4)
+                    pygame.draw.rect(screen, cell, inner, border_radius=6)
 
-        pygame.draw.rect(screen, theme.SURFACE, self.next_rect, border_radius=theme.RADIUS_MEDIUM)
+    def draw_piece(self, screen: pygame.Surface, piece: dict, offset_x: int, offset_y: int, preview: bool = False) -> None:
+        shape = piece["shape"]
+        color = piece["color"]
 
-        if not self.next_shape:
+        for row_index, row in enumerate(shape):
+            for col_index, value in enumerate(row):
+                if not value:
+                    continue
+
+                if preview:
+                    x = offset_x + col_index * self.CELL_SIZE
+                    y = offset_y + row_index * self.CELL_SIZE
+                else:
+                    x = self.board_rect.x + (piece["x"] + col_index) * self.CELL_SIZE
+                    y = self.board_rect.y + (piece["y"] + row_index) * self.CELL_SIZE
+
+                cell_rect = pygame.Rect(x, y, self.CELL_SIZE, self.CELL_SIZE)
+                inner = cell_rect.inflate(-4, -4)
+                pygame.draw.rect(screen, color, inner, border_radius=6)
+
+    def draw_ghost_piece(self, screen: pygame.Surface) -> None:
+        if self.current_piece is None:
             return
 
-        preview_cell = 24
-        shape_h = len(self.next_shape)
-        shape_w = len(self.next_shape[0])
+        ghost_y = self.current_piece["y"]
+        while self.valid_position(self.current_piece, self.current_piece["x"], ghost_y + 1):
+            ghost_y += 1
 
-        total_w = shape_w * preview_cell
-        total_h = shape_h * preview_cell
+        for row_index, row in enumerate(self.current_piece["shape"]):
+            for col_index, value in enumerate(row):
+                if not value:
+                    continue
+                x = self.board_rect.x + (self.current_piece["x"] + col_index) * self.CELL_SIZE
+                y = self.board_rect.y + (ghost_y + row_index) * self.CELL_SIZE
+                cell_rect = pygame.Rect(x, y, self.CELL_SIZE, self.CELL_SIZE).inflate(-6, -6)
+                pygame.draw.rect(screen, theme.MUTED_TEXT, cell_rect, width=2, border_radius=5)
 
-        start_x = self.next_rect.centerx - total_w // 2
-        start_y = self.next_rect.centery - total_h // 2
+    def draw_next_panel(self, screen: pygame.Surface) -> None:
+        pygame.draw.rect(screen, theme.SURFACE, self.next_rect, border_radius=theme.RADIUS_MEDIUM)
+        pygame.draw.rect(screen, theme.SURFACE_ALT, self.next_rect, width=2, border_radius=theme.RADIUS_MEDIUM)
 
-        for row_idx, row in enumerate(self.next_shape):
-            for col_idx, value in enumerate(row):
-                if value:
-                    x = start_x + col_idx * preview_cell
-                    y = start_y + row_idx * preview_cell
-                    self.draw_cell(screen, x, y, preview_cell, self.next_color)
+        assert self.ui is not None
+        label = self.ui.info_font.render("Next Piece", True, theme.TEXT)
+        screen.blit(label, label.get_rect(center=(self.next_rect.centerx, self.next_rect.top + 24)))
+
+        if self.next_piece is None:
+            return
+
+        shape = self.next_piece["shape"]
+        width = len(shape[0]) * self.CELL_SIZE
+        height = len(shape) * self.CELL_SIZE
+        offset_x = self.next_rect.centerx - width // 2
+        offset_y = self.next_rect.centery - height // 2 + 12
+
+        self.draw_piece(screen, self.next_piece, offset_x, offset_y, preview=True)
 
     def render(self, screen: pygame.Surface) -> None:
-        assert self.title_font is not None
-        assert self.info_font is not None
+        assert self.ui is not None
+        assert self.current_piece is not None
 
         self.rebuild_layout(screen)
         screen.fill(theme.BACKGROUND)
 
-        title = self.title_font.render("Tetris", True, theme.TEXT)
-        status_text = "Game Over" if self.is_game_over else "Stack pieces and clear lines"
-        status = self.info_font.render(status_text, True, theme.TEXT)
-        score = self.info_font.render(f"Score: {self.score}", True, theme.TEXT)
-        lines = self.info_font.render(f"Lines: {self.lines_cleared}", True, theme.TEXT)
-        controls = self.info_font.render(
-            "Move: Arrow Keys / WASD  |  Hold Down: Soft Drop  |  Rotate: Up/W/Space  |  F5: Restart  |  Esc: Back",
-            True,
-            theme.MUTED_TEXT,
+        self.ui.draw_header(
+            screen,
+            "Tetris",
+            "A/D or Left/Right move. Q/E/Up rotate. S/Down soft drop. Space hard drops.",
+        )
+        self.ui.draw_stats_row(
+            screen,
+            [
+                f"Score: {self.score}",
+                f"Lines: {self.lines}",
+                f"Level: {self.level}",
+            ],
         )
 
-        screen.blit(title, title.get_rect(center=(screen.get_width() // 2, 35)))
-        screen.blit(status, status.get_rect(center=(screen.get_width() // 2, 80)))
-        screen.blit(score, score.get_rect(center=(screen.get_width() // 2 - 120, 115)))
-        screen.blit(lines, lines.get_rect(center=(screen.get_width() // 2 + 120, 115)))
-        screen.blit(controls, controls.get_rect(center=(screen.get_width() // 2, screen.get_height() - 30)))
+        if self.game_over:
+            sub = "The stack reached the top."
+        else:
+            sub = "Plan clean placements, keep the stack low, and chase line clears."
+        self.ui.draw_sub_stats(screen, sub)
+        self.ui.draw_footer(screen, "P: Pause  |  F5: Restart  |  Esc: Back")
 
-        pygame.draw.rect(screen, theme.SURFACE, self.board_rect, border_radius=theme.RADIUS_MEDIUM)
+        self.draw_board(screen)
+        self.draw_ghost_piece(screen)
+        self.draw_piece(screen, self.current_piece, 0, 0)
+        self.draw_next_panel(screen)
 
-        for row in range(self.rows):
-            for col in range(self.cols):
-                x = self.board_rect.x + col * self.cell_size
-                y = self.board_rect.y + row * self.cell_size
+        if self.paused and not self.game_over:
+            self.ui.draw_pause_overlay(screen, self.play_rect)
 
-                color = self.grid[row][col]
-                if color is not None:
-                    self.draw_cell(screen, x, y, self.cell_size, color)
-                else:
-                    rect = pygame.Rect(x, y, self.cell_size, self.cell_size)
-                    pygame.draw.rect(screen, theme.SURFACE_ALT, rect, width=1, border_radius=4)
-
-        if not self.is_game_over:
-            for row_idx, row in enumerate(self.current_shape):
-                for col_idx, value in enumerate(row):
-                    if value:
-                        x = self.board_rect.x + (self.current_x + col_idx) * self.cell_size
-                        y = self.board_rect.y + (self.current_y + row_idx) * self.cell_size
-                        self.draw_cell(screen, x, y, self.cell_size, self.current_color)
-
-        self.render_next_piece(screen)
+        if self.game_over:
+            self.ui.draw_game_over(
+                screen,
+                self.play_rect,
+                "Game Over",
+                f"Final Score: {self.score}",
+                f"Lines Cleared: {self.lines}  |  Level Reached: {self.level}",
+            )

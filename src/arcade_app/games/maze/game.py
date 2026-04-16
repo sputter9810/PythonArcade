@@ -6,211 +6,241 @@ import pygame
 
 from arcade_app.core.game_base import GameBase
 from arcade_app.ui import theme
+from arcade_app.ui.game_ui import GameUI
 
 
 class MazeGame(GameBase):
     game_id = "maze"
     title = "Maze"
 
+    DIFFICULTIES = {
+        "Easy": (15, 15, 28),
+        "Medium": (21, 21, 22),
+        "Hard": (29, 29, 16),
+    }
+
+    DIRS = [
+        (0, -1),
+        (1, 0),
+        (0, 1),
+        (-1, 0),
+    ]
+
     def __init__(self, app) -> None:
         super().__init__(app)
+        self.ui: GameUI | None = None
+        self.mode_font: pygame.font.Font | None = None
 
-        self.title_font: pygame.font.Font | None = None
-        self.info_font: pygame.font.Font | None = None
-        self.small_font: pygame.font.Font | None = None
+        self.play_rect = pygame.Rect(0, 0, 1040, 640)
+        self.board_rect = pygame.Rect(0, 0, 600, 600)
+        self.diff_buttons: dict[str, pygame.Rect] = {}
 
-        self.play_rect = pygame.Rect(0, 0, 760, 760)
-
+        self.difficulty = "Medium"
         self.rows = 21
         self.cols = 21
-        self.cell_size = 32
+        self.cell_size = 22
 
         self.grid: list[list[int]] = []
-        self.player_cell = (1, 1)
-        self.exit_cell = (self.rows - 2, self.cols - 2)
+        self.player = (1, 1)
+        self.exit_cell = (19, 19)
 
         self.steps = 0
-        self.is_won = False
+        self.completed = False
+        self.paused = False
 
     def enter(self) -> None:
-        self.title_font = pygame.font.SysFont("arial", theme.HEADING_SIZE, bold=True)
-        self.info_font = pygame.font.SysFont("arial", theme.BODY_SIZE)
-        self.small_font = pygame.font.SysFont("arial", theme.CAPTION_SIZE)
+        self.ui = GameUI()
+        self.mode_font = pygame.font.SysFont("arial", 18, bold=True)
+        self.reset_game()
+
+    def rebuild_layout(self, screen: pygame.Surface) -> None:
+        self.play_rect = pygame.Rect((screen.get_width() - 1040) // 2, 165, 1040, 640)
+        board_w = self.cols * self.cell_size
+        board_h = self.rows * self.cell_size
+        self.board_rect = pygame.Rect(0, 0, board_w, board_h)
+        self.board_rect.center = self.play_rect.center
+        self.board_rect.x -= 40
+
+        self.diff_buttons = {
+            "Easy": pygame.Rect(self.play_rect.right - 280, self.play_rect.top + 60, 80, 38),
+            "Medium": pygame.Rect(self.play_rect.right - 185, self.play_rect.top + 60, 80, 38),
+            "Hard": pygame.Rect(self.play_rect.right - 90, self.play_rect.top + 60, 80, 38),
+        }
+
+    def set_difficulty(self, difficulty: str) -> None:
+        self.difficulty = difficulty
         self.reset_game()
 
     def reset_game(self) -> None:
-        self.grid = self.generate_maze(self.rows, self.cols)
-        self.player_cell = (1, 1)
+        self.rows, self.cols, self.cell_size = self.DIFFICULTIES[self.difficulty]
+        screen = pygame.display.get_surface()
+        if screen is not None:
+            self.rebuild_layout(screen)
+
+        self.grid = [[1 for _ in range(self.cols)] for _ in range(self.rows)]
+        self.generate_maze()
+
+        self.player = (1, 1)
         self.exit_cell = (self.rows - 2, self.cols - 2)
         self.steps = 0
-        self.is_won = False
+        self.completed = False
+        self.paused = False
 
-        # Ensure exit is open
-        self.grid[self.exit_cell[0]][self.exit_cell[1]] = 0
+    def get_persistence_payload(self) -> dict:
+        payload = super().get_persistence_payload()
+        payload["round"] = self.steps
+        payload["score"] = max(0, 2000 - self.steps * 5)
+        return payload
 
-    def rebuild_layout(self, screen: pygame.Surface) -> None:
-        board_size = min(screen.get_height() - 220, screen.get_width() - 260)
-        board_size = max(420, board_size)
+    def leave_to_menu(self) -> None:
+        from arcade_app.scenes.game_select_scene import GameSelectScene
+        self.app.scene_manager.go_to(GameSelectScene(self.app))
 
-        self.cell_size = board_size // self.cols
-        board_width = self.cols * self.cell_size
-        board_height = self.rows * self.cell_size
+    def generate_maze(self) -> None:
+        stack = [(1, 1)]
+        self.grid[1][1] = 0
 
-        self.play_rect = pygame.Rect(
-            (screen.get_width() - board_width) // 2,
-            130,
-            board_width,
-            board_height,
-        )
+        while stack:
+            r, c = stack[-1]
+            neighbors = []
 
-    def generate_maze(self, rows: int, cols: int) -> list[list[int]]:
-        grid = [[1 for _ in range(cols)] for _ in range(rows)]
+            for dc, dr in self.DIRS:
+                nr = r + dr * 2
+                nc = c + dc * 2
+                if 1 <= nr < self.rows - 1 and 1 <= nc < self.cols - 1 and self.grid[nr][nc] == 1:
+                    neighbors.append((nr, nc, r + dr, c + dc))
 
-        def carve_passages(start_r: int, start_c: int) -> None:
-            stack = [(start_r, start_c)]
-            grid[start_r][start_c] = 0
+            if neighbors:
+                nr, nc, wr, wc = random.choice(neighbors)
+                self.grid[wr][wc] = 0
+                self.grid[nr][nc] = 0
+                stack.append((nr, nc))
+            else:
+                stack.pop()
 
-            while stack:
-                r, c = stack[-1]
+        self.grid[self.rows - 2][self.cols - 2] = 0
 
-                neighbors = []
-                directions = [(-2, 0), (2, 0), (0, -2), (0, 2)]
-                random.shuffle(directions)
+    def can_move(self, row: int, col: int) -> bool:
+        return 0 <= row < self.rows and 0 <= col < self.cols and self.grid[row][col] == 0
 
-                for dr, dc in directions:
-                    nr = r + dr
-                    nc = c + dc
-                    if 1 <= nr < rows - 1 and 1 <= nc < cols - 1 and grid[nr][nc] == 1:
-                        neighbors.append((nr, nc, dr, dc))
-
-                if neighbors:
-                    nr, nc, dr, dc = neighbors[0]
-                    wall_r = r + dr // 2
-                    wall_c = c + dc // 2
-
-                    grid[wall_r][wall_c] = 0
-                    grid[nr][nc] = 0
-                    stack.append((nr, nc))
-                else:
-                    stack.pop()
-
-        carve_passages(1, 1)
-
-        # Ensure end area is reachable/open
-        grid[rows - 2][cols - 2] = 0
-        if grid[rows - 2][cols - 3] == 1 and grid[rows - 3][cols - 2] == 1:
-            grid[rows - 2][cols - 3] = 0
-
-        return grid
-
-    def can_move_to(self, row: int, col: int) -> bool:
-        if not (0 <= row < self.rows and 0 <= col < self.cols):
-            return False
-        return self.grid[row][col] == 0
-
-    def try_move(self, dr: int, dc: int) -> None:
-        if self.is_won:
+    def move_player(self, dr: int, dc: int) -> None:
+        if self.paused or self.completed:
             return
 
-        row, col = self.player_cell
-        new_row = row + dr
-        new_col = col + dc
-
-        if self.can_move_to(new_row, new_col):
-            self.player_cell = (new_row, new_col)
+        row, col = self.player
+        nr, nc = row + dr, col + dc
+        if self.can_move(nr, nc):
+            self.player = (nr, nc)
             self.steps += 1
+            if self.player == self.exit_cell:
+                self.completed = True
 
-            if self.player_cell == self.exit_cell:
-                self.is_won = True
+    def draw_diff_button(self, screen: pygame.Surface, label: str, rect: pygame.Rect, selected: bool) -> None:
+        assert self.mode_font is not None
+        fill = theme.SURFACE_ALT if selected else theme.SURFACE
+        border = theme.ACCENT if selected else theme.SURFACE_ALT
+        pygame.draw.rect(screen, fill, rect, border_radius=10)
+        pygame.draw.rect(screen, border, rect, width=2, border_radius=10)
+        surface = self.mode_font.render(label, True, theme.TEXT)
+        screen.blit(surface, surface.get_rect(center=rect.center))
 
     def handle_events(self, events: list[pygame.event.Event]) -> None:
         for event in events:
-            if event.type != pygame.KEYDOWN:
-                continue
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    self.leave_to_menu()
+                elif event.key == pygame.K_p and not self.completed:
+                    self.paused = not self.paused
+                elif event.key == pygame.K_F5:
+                    self.reset_game()
+                elif self.completed and event.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER):
+                    self.reset_game()
+                elif event.key in (pygame.K_LEFT, pygame.K_a):
+                    self.move_player(0, -1)
+                elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                    self.move_player(0, 1)
+                elif event.key in (pygame.K_UP, pygame.K_w):
+                    self.move_player(-1, 0)
+                elif event.key in (pygame.K_DOWN, pygame.K_s):
+                    self.move_player(1, 0)
 
-            if event.key == pygame.K_ESCAPE:
-                from arcade_app.scenes.game_select_scene import GameSelectScene
-                self.app.scene_manager.go_to(GameSelectScene(self.app))
-            elif event.key == pygame.K_F5:
-                self.reset_game()
-            elif event.key in (pygame.K_UP, pygame.K_w):
-                self.try_move(-1, 0)
-            elif event.key in (pygame.K_DOWN, pygame.K_s):
-                self.try_move(1, 0)
-            elif event.key in (pygame.K_LEFT, pygame.K_a):
-                self.try_move(0, -1)
-            elif event.key in (pygame.K_RIGHT, pygame.K_d):
-                self.try_move(0, 1)
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                for label, rect in self.diff_buttons.items():
+                    if rect.collidepoint(event.pos):
+                        self.set_difficulty(label)
+                        return
+                if self.completed:
+                    self.reset_game()
 
     def update(self, dt: float) -> None:
-        return
-
-    def draw_maze(self, screen: pygame.Surface) -> None:
-        for row in range(self.rows):
-            for col in range(self.cols):
-                x = self.play_rect.x + col * self.cell_size
-                y = self.play_rect.y + row * self.cell_size
-                rect = pygame.Rect(x, y, self.cell_size, self.cell_size)
-
-                if self.grid[row][col] == 1:
-                    pygame.draw.rect(screen, theme.SURFACE_ALT, rect)
-                else:
-                    pygame.draw.rect(screen, theme.SURFACE, rect)
-
-        # Exit
-        exit_x = self.play_rect.x + self.exit_cell[1] * self.cell_size
-        exit_y = self.play_rect.y + self.exit_cell[0] * self.cell_size
-        exit_rect = pygame.Rect(exit_x, exit_y, self.cell_size, self.cell_size)
-        pygame.draw.rect(screen, theme.SUCCESS, exit_rect, border_radius=6)
-
-        # Player
-        player_x = self.play_rect.x + self.player_cell[1] * self.cell_size + self.cell_size // 2
-        player_y = self.play_rect.y + self.player_cell[0] * self.cell_size + self.cell_size // 2
-        pygame.draw.circle(
-            screen,
-            theme.ACCENT,
-            (player_x, player_y),
-            max(6, self.cell_size // 3),
-        )
+        screen = pygame.display.get_surface()
+        if screen is not None:
+            self.rebuild_layout(screen)
 
     def render(self, screen: pygame.Surface) -> None:
-        assert self.title_font is not None
-        assert self.info_font is not None
-        assert self.small_font is not None
+        assert self.ui is not None
+        assert self.mode_font is not None
 
         self.rebuild_layout(screen)
         screen.fill(theme.BACKGROUND)
 
-        title = self.title_font.render("Maze", True, theme.TEXT)
-
-        if self.is_won:
-            status_text = "You escaped!"
-        else:
-            status_text = "Find the exit"
-
-        status = self.info_font.render(status_text, True, theme.TEXT)
-        steps = self.info_font.render(f"Steps: {self.steps}", True, theme.TEXT)
-        controls = self.info_font.render(
-            "Move: WASD / Arrows  |  F5: New Maze  |  Esc: Back",
-            True,
-            theme.MUTED_TEXT,
+        self.ui.draw_header(
+            screen,
+            "Maze",
+            "Move with Arrow Keys or WASD. Find the exit in as few steps as possible.",
         )
-
-        legend_start = self.small_font.render("Start: Blue", True, theme.MUTED_TEXT)
-        legend_exit = self.small_font.render("Exit: Green", True, theme.MUTED_TEXT)
-
-        screen.blit(title, title.get_rect(center=(screen.get_width() // 2, 32)))
-        screen.blit(status, status.get_rect(center=(screen.get_width() // 2, 75)))
-        screen.blit(steps, steps.get_rect(center=(screen.get_width() // 2, 108)))
-        screen.blit(controls, controls.get_rect(center=(screen.get_width() // 2, screen.get_height() - 28)))
-        screen.blit(legend_start, legend_start.get_rect(midleft=(self.play_rect.left, 108)))
-        screen.blit(legend_exit, legend_exit.get_rect(midright=(self.play_rect.right, 108)))
+        self.ui.draw_stats_row(
+            screen,
+            [
+                f"Difficulty: {self.difficulty}",
+                f"Steps: {self.steps}",
+            ],
+        )
+        sub = "Plan your route, avoid backtracking, and reach the exit cleanly." if not self.completed else "Exit reached."
+        self.ui.draw_sub_stats(screen, sub)
+        self.ui.draw_footer(screen, "P: Pause  |  F5: New Maze  |  Esc: Back")
 
         pygame.draw.rect(screen, theme.SURFACE, self.play_rect, border_radius=theme.RADIUS_MEDIUM)
-        self.draw_maze(screen)
+        pygame.draw.rect(screen, theme.SURFACE_ALT, self.play_rect, width=2, border_radius=theme.RADIUS_MEDIUM)
 
-        if self.is_won:
-            win_text = self.title_font.render("Victory!", True, theme.TEXT)
-            replay = self.info_font.render("Press F5 for a new maze", True, theme.MUTED_TEXT)
-            screen.blit(win_text, win_text.get_rect(center=(screen.get_width() // 2, screen.get_height() // 2 - 18)))
-            screen.blit(replay, replay.get_rect(center=(screen.get_width() // 2, screen.get_height() // 2 + 22)))
+        for label, rect in self.diff_buttons.items():
+            self.draw_diff_button(screen, label, rect, label == self.difficulty)
+
+        for r in range(self.rows):
+            for c in range(self.cols):
+                rect = pygame.Rect(
+                    self.board_rect.x + c * self.cell_size,
+                    self.board_rect.y + r * self.cell_size,
+                    self.cell_size,
+                    self.cell_size,
+                )
+                color = theme.BACKGROUND if self.grid[r][c] == 1 else theme.SURFACE_ALT
+                pygame.draw.rect(screen, color, rect)
+
+        exit_rect = pygame.Rect(
+            self.board_rect.x + self.exit_cell[1] * self.cell_size,
+            self.board_rect.y + self.exit_cell[0] * self.cell_size,
+            self.cell_size,
+            self.cell_size,
+        )
+        pygame.draw.rect(screen, theme.ACCENT, exit_rect)
+
+        player_rect = pygame.Rect(
+            self.board_rect.x + self.player[1] * self.cell_size + 2,
+            self.board_rect.y + self.player[0] * self.cell_size + 2,
+            self.cell_size - 4,
+            self.cell_size - 4,
+        )
+        pygame.draw.rect(screen, theme.WARNING, player_rect, border_radius=4)
+
+        if self.paused and not self.completed:
+            self.ui.draw_pause_overlay(screen, self.play_rect)
+
+        if self.completed:
+            self.ui.draw_game_over(
+                screen,
+                self.play_rect,
+                "Maze Cleared",
+                f"Difficulty: {self.difficulty}",
+                f"Steps Taken: {self.steps}",
+            )

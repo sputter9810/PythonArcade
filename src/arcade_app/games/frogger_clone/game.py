@@ -4,6 +4,7 @@ import pygame
 
 from arcade_app.core.game_base import GameBase
 from arcade_app.ui import theme
+from arcade_app.ui.game_ui import GameUI
 
 
 class FroggerCloneGame(GameBase):
@@ -13,10 +14,7 @@ class FroggerCloneGame(GameBase):
     def __init__(self, app) -> None:
         super().__init__(app)
 
-        self.title_font: pygame.font.Font | None = None
-        self.info_font: pygame.font.Font | None = None
-        self.small_font: pygame.font.Font | None = None
-        self.big_font: pygame.font.Font | None = None
+        self.ui: GameUI | None = None
 
         self.play_rect = pygame.Rect(0, 0, 960, 704)
         self.cell_size = 64
@@ -34,6 +32,7 @@ class FroggerCloneGame(GameBase):
         self.score = 0
         self.lives = 3
         self.game_over = False
+        self.paused = False
 
         self.home_slots: list[int] = []
         self.filled_homes: set[int] = set()
@@ -42,10 +41,7 @@ class FroggerCloneGame(GameBase):
         self.river_lanes: list[dict] = []
 
     def enter(self) -> None:
-        self.title_font = pygame.font.SysFont("arial", theme.HEADING_SIZE, bold=True)
-        self.info_font = pygame.font.SysFont("arial", theme.BODY_SIZE)
-        self.small_font = pygame.font.SysFont("arial", theme.CAPTION_SIZE)
-        self.big_font = pygame.font.SysFont("arial", 52, bold=True)
+        self.ui = GameUI()
         self.reset_game()
 
     def reset_game(self) -> None:
@@ -57,6 +53,7 @@ class FroggerCloneGame(GameBase):
         self.score = 0
         self.lives = 3
         self.game_over = False
+        self.paused = False
         self.setup_level(reset_score=False)
 
     def setup_level(self, reset_score: bool = False) -> None:
@@ -203,7 +200,7 @@ class FroggerCloneGame(GameBase):
             self.lose_life()
 
     def attempt_move(self, dc: int, dr: int) -> None:
-        if self.game_over or self.player_move_cooldown > 0:
+        if self.game_over or self.paused or self.player_move_cooldown > 0:
             return
 
         new_col = max(0, min(self.cols - 1, self.player_col + dc))
@@ -226,6 +223,8 @@ class FroggerCloneGame(GameBase):
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     self.leave_to_menu()
+                elif event.key == pygame.K_p and not self.game_over:
+                    self.paused = not self.paused
                 elif event.key == pygame.K_F5:
                     self.reset_game()
                 elif self.game_over and event.key in (pygame.K_SPACE, pygame.K_RETURN):
@@ -256,6 +255,9 @@ class FroggerCloneGame(GameBase):
         screen = pygame.display.get_surface()
         if screen is not None:
             self.rebuild_layout(screen)
+
+        if self.paused:
+            return
 
         if self.player_move_cooldown > 0:
             self.player_move_cooldown -= dt
@@ -403,57 +405,38 @@ class FroggerCloneGame(GameBase):
         pygame.draw.circle(screen, theme.TEXT, (rect.right - 14, eye_y), 4)
 
     def render_hud(self, screen: pygame.Surface) -> None:
-        assert self.title_font is not None
-        assert self.info_font is not None
-        assert self.small_font is not None
+        assert self.ui is not None
 
-        title = self.title_font.render("Frogger Clone", True, theme.TEXT)
-        subtitle = self.small_font.render(
+        self.ui.draw_header(
+            screen,
+            "Frogger Clone",
             "Move with Arrow Keys or WASD. Reach all home slots. F5 restart, Esc back.",
-            True,
-            theme.MUTED_TEXT,
         )
-        screen.blit(title, title.get_rect(center=(screen.get_width() // 2, 36)))
-        screen.blit(subtitle, subtitle.get_rect(center=(screen.get_width() // 2, 72)))
-
-        stats = [
-            f"Score: {self.score}",
-            f"Lives: {self.lives}",
-            f"Level: {self.level}",
-            f"Homes: {len(self.filled_homes)}/{len(self.home_slots)}",
-        ]
-        start_x = screen.get_width() // 2 - 300
-        gap = 200
-        for index, stat in enumerate(stats):
-            surface = self.info_font.render(stat, True, theme.TEXT)
-            screen.blit(surface, surface.get_rect(center=(start_x + index * gap, 110)))
+        self.ui.draw_stats_row(
+            screen,
+            [
+                f"Score: {self.score}",
+                f"Lives: {self.lives}",
+                f"Level: {self.level}",
+                f"Homes: {len(self.filled_homes)}/{len(self.home_slots)}",
+            ],
+        )
+        self.ui.draw_sub_stats(
+            screen,
+            "Use logs safely, avoid traffic, and finish every lane cleanly.",
+        )
+        self.ui.draw_footer(screen, "P: Pause  |  F5: Restart  |  Esc: Back")
 
     def render_game_over_overlay(self, screen: pygame.Surface) -> None:
-        assert self.big_font is not None
-        assert self.info_font is not None
-        assert self.small_font is not None
+        assert self.ui is not None
 
-        panel = pygame.Rect(0, 0, 560, 230)
-        panel.center = self.play_rect.center
-
-        overlay = pygame.Surface((panel.width, panel.height), pygame.SRCALPHA)
-        overlay.fill((8, 10, 16, 220))
-        screen.blit(overlay, panel.topleft)
-        pygame.draw.rect(screen, theme.ACCENT, panel, width=2, border_radius=theme.RADIUS_MEDIUM)
-
-        title = self.big_font.render("Game Over", True, theme.TEXT)
-        score = self.info_font.render(f"Final Score: {self.score}", True, theme.TEXT)
-        level = self.info_font.render(f"Highest Level: {self.level}", True, theme.TEXT)
-        controls = self.small_font.render(
-            "Press Space / Enter / F5 to restart   |   Esc to go back",
-            True,
-            theme.MUTED_TEXT,
+        self.ui.draw_game_over(
+            screen,
+            self.play_rect,
+            "Game Over",
+            f"Final Score: {self.score}",
+            f"Highest Level: {self.level}  |  Homes Filled: {len(self.filled_homes)}/{len(self.home_slots)}",
         )
-
-        screen.blit(title, title.get_rect(center=(panel.centerx, panel.top + 58)))
-        screen.blit(score, score.get_rect(center=(panel.centerx, panel.top + 118)))
-        screen.blit(level, level.get_rect(center=(panel.centerx, panel.top + 152)))
-        screen.blit(controls, controls.get_rect(center=(panel.centerx, panel.top + 192)))
 
     def render(self, screen: pygame.Surface) -> None:
         screen.fill(theme.BACKGROUND)
@@ -463,6 +446,10 @@ class FroggerCloneGame(GameBase):
         self.draw_road_movers(screen)
         self.draw_player(screen)
         self.render_hud(screen)
+
+        if self.paused and not self.game_over:
+            assert self.ui is not None
+            self.ui.draw_pause_overlay(screen, self.play_rect)
 
         if self.game_over:
             self.render_game_over_overlay(screen)
