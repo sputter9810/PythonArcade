@@ -5,6 +5,7 @@ import random
 import pygame
 
 from arcade_app.core.game_base import GameBase
+from arcade_app.core.run_result import RunResult
 from arcade_app.ui import theme
 from arcade_app.ui.game_ui import GameUI
 
@@ -62,6 +63,7 @@ class TetrisGame(GameBase):
 
         self.game_over = False
         self.paused = False
+        self.result_submitted = False
 
         self.left_held = False
         self.right_held = False
@@ -106,6 +108,7 @@ class TetrisGame(GameBase):
         self.fall_timer = 0.0
         self.game_over = False
         self.paused = False
+        self.result_submitted = False
 
         self.left_held = False
         self.right_held = False
@@ -118,6 +121,7 @@ class TetrisGame(GameBase):
 
         if not self.valid_position(self.current_piece, self.current_piece["x"], self.current_piece["y"]):
             self.game_over = True
+            self.submit_run_result()
 
     def get_persistence_payload(self) -> dict:
         payload = super().get_persistence_payload()
@@ -198,6 +202,23 @@ class TetrisGame(GameBase):
 
         return False
 
+    def submit_run_result(self) -> None:
+        if self.result_submitted:
+            return
+
+        self.result_submitted = True
+
+        result = RunResult(
+            game_id="tetris",
+            score=self.score,
+            metadata={
+                "lines": self.lines,
+                "level": self.level,
+            },
+        )
+
+        self.app.save_data.submit_run_result(result)
+
     def lock_piece(self) -> None:
         if self.current_piece is None:
             return
@@ -223,6 +244,7 @@ class TetrisGame(GameBase):
 
         if self.current_piece is not None and not self.valid_position(self.current_piece, self.current_piece["x"], self.current_piece["y"]):
             self.game_over = True
+            self.submit_run_result()
 
     def clear_lines(self) -> int:
         remaining_rows = [row for row in self.board if any(cell is None for cell in row)]

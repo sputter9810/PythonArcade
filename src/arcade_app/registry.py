@@ -35,7 +35,7 @@ from arcade_app.games.zombie_survival.game import ZombieSurvivalGame
 from arcade_app.scenes.placeholder_game_scene import PlaceholderGameScene
 
 
-GAME_REGISTRY = sorted(
+_RAW_GAME_REGISTRY = sorted(
     [
         {
             "id": "advanced_target_trainer",
@@ -330,6 +330,64 @@ GAME_REGISTRY = sorted(
 )
 
 
+def _build_game_tags(game: dict) -> list[str]:
+    category = str(game.get("category", "")).strip()
+    modes = [str(mode).strip() for mode in game.get("modes", []) if str(mode).strip()]
+
+    tags = [category] if category else []
+    tags.extend(modes)
+
+    category_lower = category.lower()
+    if category_lower in {"arcade", "action"}:
+        tags.extend(["Fast-Paced", "High Score"])
+    elif category_lower == "puzzle":
+        tags.extend(["Brain Training", "Generated" if "generated" in str(game.get("description", "")).lower() else "Logic"])
+    elif category_lower == "strategy":
+        tags.extend(["Tactics", "Board Game"])
+    elif category_lower in {"word", "memory"}:
+        tags.extend(["Focus", "Pattern"])
+    elif category_lower == "skill":
+        tags.extend(["Practice", "Precision"])
+
+    unique_tags: list[str] = []
+    for tag in tags:
+        if tag and tag not in unique_tags:
+            unique_tags.append(tag)
+    return unique_tags
+
+
+def _normalise_game_entry(game: dict) -> dict:
+    normalised = dict(game)
+    normalised['supports_seeded_runs'] = bool(normalised.get('implemented', False) and normalised.get('scene_class') is not None)
+    normalised["tags"] = _build_game_tags(normalised)
+    normalised["search_terms"] = [
+        str(normalised.get("title", "")),
+        str(normalised.get("description", "")),
+        str(normalised.get("category", "")),
+        *[str(mode) for mode in normalised.get("modes", [])],
+        *normalised["tags"],
+    ]
+    normalised["status_label"] = "Ready to Play" if normalised.get("implemented", False) else "Coming Soon"
+    normalised["detail_bullets"] = [
+        str(normalised.get("description", "")),
+        f"Category: {normalised.get('category', 'Unknown')}",
+        f"Modes: {', '.join(normalised.get('modes', [])) or 'Unknown'}",
+        normalised["status_label"],
+    ]
+    return normalised
+
+
+GAME_REGISTRY = sorted(
+    [_normalise_game_entry(game) for game in _RAW_GAME_REGISTRY],
+    key=lambda game: str(game["title"]).lower(),
+)
+
+
+def get_game_categories() -> list[str]:
+    categories = sorted({str(game.get("category", "Unknown")) for game in GAME_REGISTRY}, key=str.lower)
+    return ["All", *categories]
+
+
 def get_game_by_id(game_id: str) -> dict | None:
     for game in GAME_REGISTRY:
         if game["id"] == game_id:
@@ -337,7 +395,7 @@ def get_game_by_id(game_id: str) -> dict | None:
     return None
 
 
-def create_game_scene(game_id: str, app):
+def create_game_scene(game_id: str, app, launch_context: dict | None = None):
     game = get_game_by_id(game_id)
     if game is None:
         return PlaceholderGameScene(app, "Unknown Game")
@@ -346,4 +404,9 @@ def create_game_scene(game_id: str, app):
     if scene_class is None:
         return PlaceholderGameScene(app, game["title"])
 
-    return scene_class(app)
+    scene = scene_class(app)
+    if launch_context:
+        setattr(scene, 'launch_context', dict(launch_context))
+    else:
+        setattr(scene, 'launch_context', {})
+    return scene

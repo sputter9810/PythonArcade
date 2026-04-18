@@ -6,6 +6,7 @@ import random
 import pygame
 
 from arcade_app.core.game_base import GameBase
+from arcade_app.core.run_result import RunResult
 from arcade_app.ui import theme
 from arcade_app.ui.game_ui import GameUI
 
@@ -40,6 +41,7 @@ class TimeAttackChallengeGame(GameBase):
 
         self.game_over = False
         self.paused = False
+        self.result_submitted = False
 
         self.pickup_spawn_timer = 0.0
         self.hazard_spawn_timer = 0.0
@@ -76,6 +78,7 @@ class TimeAttackChallengeGame(GameBase):
         self.hazard_spawn_timer = 1.2
         self.combo_timer = 0.0
         self.flash_timer = 0.0
+        self.result_submitted = False
 
         for _ in range(4):
             self.spawn_pickup()
@@ -91,6 +94,23 @@ class TimeAttackChallengeGame(GameBase):
         payload["accuracy"] = round(self.collection_accuracy(), 1)
         payload["round"] = self.best_combo
         return payload
+
+    def submit_run_result(self) -> None:
+        if self.result_submitted:
+            return
+
+        self.result_submitted = True
+        result = RunResult(
+            game_id=self.game_id,
+            score=self.score,
+            metadata={
+                "hits": self.pickups_collected,
+                "accuracy": round(self.collection_accuracy(), 1),
+                "round": self.best_combo,
+                "hits_taken": self.hits_taken,
+            },
+        )
+        self.app.save_data.submit_run_result(result)
 
     def leave_to_menu(self) -> None:
         from arcade_app.scenes.game_select_scene import GameSelectScene
@@ -289,6 +309,7 @@ class TimeAttackChallengeGame(GameBase):
         if self.time_left <= 0:
             self.time_left = 0.0
             self.game_over = True
+            self.submit_run_result()
             return
 
         if self.combo_timer > 0:

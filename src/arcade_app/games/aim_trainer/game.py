@@ -6,6 +6,7 @@ import random
 import pygame
 
 from arcade_app.core.game_base import GameBase
+from arcade_app.core.run_result import RunResult
 from arcade_app.ui import theme
 
 
@@ -41,6 +42,7 @@ class AimTrainerGame(GameBase):
         self.time_left = self.SESSION_LENGTH
         self.is_game_over = False
         self.session_started = False
+        self.result_submitted = False
 
         self.total_reaction_time = 0.0
         self.best_reaction_time: float | None = None
@@ -66,6 +68,7 @@ class AimTrainerGame(GameBase):
         self.target_elapsed = 0.0
         self.target_lifetime = self.TARGET_LIFETIME_START
         self.target_radius = self.TARGET_BASE_RADIUS
+        self.result_submitted = False
         self.spawn_new_target()
 
     def rebuild_layout(self, screen: pygame.Surface) -> None:
@@ -128,6 +131,22 @@ class AimTrainerGame(GameBase):
 
         return payload
 
+    def submit_run_result(self) -> None:
+        if self.result_submitted:
+            return
+
+        self.result_submitted = True
+        result = RunResult(
+            game_id=self.game_id,
+            score=self.score,
+            metadata={
+                "hits": self.hits,
+                "accuracy": round(self.accuracy(), 1),
+                "reaction_ms": self.best_reaction_ms() if self.best_reaction_time is not None else None,
+            },
+        )
+        self.app.save_data.submit_run_result(result)
+
     def leave_to_menu(self) -> None:
         from arcade_app.scenes.game_select_scene import GameSelectScene
 
@@ -185,6 +204,7 @@ class AimTrainerGame(GameBase):
         if self.time_left <= 0:
             self.time_left = 0.0
             self.is_game_over = True
+            self.submit_run_result()
             return
 
         self.target_elapsed += dt

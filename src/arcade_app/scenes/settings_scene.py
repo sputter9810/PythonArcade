@@ -39,16 +39,21 @@ class SettingsScene(SceneBase):
 
     def handle_events(self, events: list[pygame.event.Event]) -> None:
         for event in events:
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    from arcade_app.scenes.main_menu_scene import MainMenuScene
-                    self.app.scene_manager.go_to(MainMenuScene(self.app))
-                elif event.key in (pygame.K_UP, pygame.K_w):
-                    self.selected_index = max(0, self.selected_index - 1)
-                elif event.key in (pygame.K_DOWN, pygame.K_s):
-                    self.selected_index = min(len(self.options) - 1, self.selected_index + 1)
-                elif event.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_LEFT, pygame.K_RIGHT, pygame.K_a, pygame.K_d):
-                    self.toggle_selected_option()
+            if event.type != pygame.KEYDOWN:
+                continue
+
+            if event.key == pygame.K_ESCAPE:
+                from arcade_app.scenes.main_menu_scene import MainMenuScene
+                self.app.scene_manager.go_to(MainMenuScene(self.app))
+            elif event.key == pygame.K_p:
+                from arcade_app.scenes.profile_manager_scene import ProfileManagerScene
+                self.app.scene_manager.go_to(ProfileManagerScene(self.app, return_scene="menu"))
+            elif event.key in (pygame.K_UP, pygame.K_w):
+                self.selected_index = max(0, self.selected_index - 1)
+            elif event.key in (pygame.K_DOWN, pygame.K_s):
+                self.selected_index = min(len(self.options) - 1, self.selected_index + 1)
+            elif event.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_LEFT, pygame.K_RIGHT, pygame.K_a, pygame.K_d):
+                self.toggle_selected_option()
 
     def update(self, dt: float) -> None:
         return
@@ -66,7 +71,7 @@ class SettingsScene(SceneBase):
             True,
             theme.MUTED_TEXT,
         )
-        footer = self.meta_font.render("Esc: Back to Main Menu", True, theme.MUTED_TEXT)
+        footer = self.meta_font.render("Esc: Back to Main Menu  |  P: Profiles", True, theme.MUTED_TEXT)
 
         screen.blit(title, title.get_rect(center=(screen.get_width() // 2, 70)))
         screen.blit(subtitle, subtitle.get_rect(center=(screen.get_width() // 2, 120)))
@@ -74,13 +79,7 @@ class SettingsScene(SceneBase):
 
         panel_width = 700
         panel_height = 280
-        panel_rect = pygame.Rect(
-            (screen.get_width() - panel_width) // 2,
-            190,
-            panel_width,
-            panel_height,
-        )
-
+        panel_rect = pygame.Rect((screen.get_width() - panel_width) // 2, 190, panel_width, panel_height)
         pygame.draw.rect(screen, theme.SURFACE, panel_rect, border_radius=theme.RADIUS_LARGE)
 
         row_height = 70
@@ -103,3 +102,7 @@ class SettingsScene(SceneBase):
 
             screen.blit(label, label.get_rect(midleft=(row_rect.x + 20, row_rect.centery)))
             screen.blit(value, value.get_rect(midright=(row_rect.right - 20, row_rect.centery)))
+
+        profile = self.app.save_data.get_profile_summary()
+        profile_surface = self.meta_font.render(f"Active Profile: {profile['name']}", True, theme.ACCENT)
+        screen.blit(profile_surface, profile_surface.get_rect(center=(screen.get_width() // 2, 500)))

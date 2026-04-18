@@ -5,6 +5,7 @@ import random
 import pygame
 
 from arcade_app.core.game_base import GameBase
+from arcade_app.core.run_result import RunResult
 from arcade_app.ui import theme
 from arcade_app.ui.game_ui import GameUI
 
@@ -42,6 +43,7 @@ class ReactionTimerGame(GameBase):
 
         self.pulse_timer = 0.0
         self.paused = False
+        self.result_submitted = False
 
     def enter(self) -> None:
         self.ui = GameUI()
@@ -65,6 +67,24 @@ class ReactionTimerGame(GameBase):
 
         self.pulse_timer = 0.0
         self.paused = False
+        self.result_submitted = False
+
+    def submit_run_result(self) -> None:
+        if self.result_submitted:
+            return
+
+        self.result_submitted = True
+        result = RunResult(
+            game_id=self.game_id,
+            score=max(0, 5000 - self.average_reaction_ms()) if self.results else 0,
+            metadata={
+                "round": max(self.round_index, len(self.results)),
+                "reaction_ms": self.best_reaction_ms() if self.best_reaction_ms_value is not None else None,
+                "accuracy": 0.0 if self.TOTAL_ROUNDS == 0 else round((len(self.results) / self.TOTAL_ROUNDS) * 100.0, 1),
+                "false_starts": self.false_starts,
+            },
+        )
+        self.app.save_data.submit_run_result(result)
 
     def rebuild_layout(self, screen: pygame.Surface) -> None:
         self.play_rect = pygame.Rect(0, 0, 960, 620)
@@ -85,6 +105,7 @@ class ReactionTimerGame(GameBase):
     def advance_after_round(self) -> None:
         if self.round_index >= self.TOTAL_ROUNDS:
             self.state = self.STATE_SESSION_COMPLETE
+            self.submit_run_result()
         else:
             self.state = self.STATE_IDLE
 

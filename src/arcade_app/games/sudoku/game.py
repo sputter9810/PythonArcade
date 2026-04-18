@@ -5,6 +5,7 @@ import random
 import pygame
 
 from arcade_app.core.game_base import GameBase
+from arcade_app.core.run_result import RunResult
 from arcade_app.ui import theme
 from arcade_app.ui.game_ui import GameUI
 
@@ -12,6 +13,7 @@ from arcade_app.ui.game_ui import GameUI
 class SudokuGame(GameBase):
     game_id = "sudoku"
     title = "Sudoku"
+    MAX_MISTAKES = 3
 
     DIFFICULTIES = {
         "Easy": 40,
@@ -25,6 +27,7 @@ class SudokuGame(GameBase):
         self.value_font: pygame.font.Font | None = None
         self.note_font: pygame.font.Font | None = None
         self.mode_font: pygame.font.Font | None = None
+        self.message_font: pygame.font.Font | None = None
 
         self.play_rect = pygame.Rect(0, 0, 1120, 640)
         self.board_rect = pygame.Rect(0, 0, 540, 540)
@@ -34,6 +37,7 @@ class SudokuGame(GameBase):
         self.givens: list[list[int]] = []
         self.board: list[list[int]] = []
         self.notes: list[list[set[int]]] = []
+        self.wrong_entries: list[list[int]] = []
 
         self.selected_row = 0
         self.selected_col = 0
@@ -43,13 +47,16 @@ class SudokuGame(GameBase):
         self.moves = 0
         self.mistakes = 0
         self.completed = False
+        self.failed = False
         self.paused = False
+        self.result_submitted = False
 
     def enter(self) -> None:
         self.ui = GameUI()
         self.value_font = pygame.font.SysFont("arial", 28, bold=True)
-        self.note_font = pygame.font.SysFont("arial", 12)
+        self.note_font = pygame.font.SysFont("arial", 14)
         self.mode_font = pygame.font.SysFont("arial", 18, bold=True)
+        self.message_font = pygame.font.SysFont("arial", 18, bold=True)
         self.reset_game()
 
     def rebuild_layout(self, screen: pygame.Surface) -> None:
@@ -73,6 +80,7 @@ class SudokuGame(GameBase):
         self.givens = self.generate_puzzle(self.solution, self.DIFFICULTIES[self.difficulty])
         self.board = [row[:] for row in self.givens]
         self.notes = [[set() for _ in range(9)] for _ in range(9)]
+        self.wrong_entries = [[0 for _ in range(9)] for _ in range(9)]
 
         self.selected_row = 0
         self.selected_col = 0
@@ -80,7 +88,26 @@ class SudokuGame(GameBase):
         self.moves = 0
         self.mistakes = 0
         self.completed = False
+        self.failed = False
         self.paused = False
+        self.result_submitted = False
+
+    def submit_run_result(self) -> None:
+        if self.result_submitted:
+            return
+
+        self.result_submitted = True
+        result = RunResult(
+            game_id=self.game_id,
+            score=max(0, 1000 - self.mistakes * 150),
+            metadata={
+                "round": self.moves,
+                "mistakes": self.mistakes,
+                "difficulty": self.difficulty,
+                "completed": self.completed,
+            },
+        )
+        self.app.save_data.submit_run_result(result)
 
     def set_difficulty(self, difficulty: str) -> None:
         self.difficulty = difficulty
@@ -88,7 +115,7 @@ class SudokuGame(GameBase):
 
     def get_persistence_payload(self) -> dict:
         payload = super().get_persistence_payload()
-        payload["score"] = max(0, 1000 - self.mistakes * 100)
+        payload["score"] = max(0, 1000 - self.mistakes * 150)
         payload["round"] = self.moves
         return payload
 
@@ -137,7 +164,6 @@ class SudokuGame(GameBase):
                 if self.solve_grid(grid):
                     return True
                 grid[row][col] = 0
-
         return False
 
     def generate_solution(self) -> list[list[int]]:
@@ -192,10 +218,15 @@ class SudokuGame(GameBase):
         screen.blit(surface, surface.get_rect(center=rect.center))
 
     def set_value(self, value: int) -> None:
-        if self.completed or self.paused or self.is_given(self.selected_row, self.selected_col):
+        if self.completed or self.failed or self.paused or self.is_given(self.selected_row, self.selected_col):
             return
 
+        current_wrong = self.wrong_entries[self.selected_row][self.selected_col]
+
         if self.note_mode and value != 0:
+            if current_wrong:
+                return
+
             notes = self.notes[self.selected_row][self.selected_col]
             if value in notes:
                 notes.remove(value)
@@ -205,36 +236,46 @@ class SudokuGame(GameBase):
             return
 
         if value == 0:
-            if self.board[self.selected_row][self.selected_col] != 0:
+            if self.board[self.selected_row][self.selected_col] != 0 or current_wrong != 0:
                 self.board[self.selected_row][self.selected_col] = 0
+                self.wrong_entries[self.selected_row][self.selected_col] = 0
                 self.notes[self.selected_row][self.selected_col].clear()
                 self.moves += 1
             return
 
         self.moves += 1
-        if value != self.solution[self.selected_row][self.selected_col]:
+        expected = self.solution[self.selected_row][self.selected_col]
+        if value != expected:
+            self.wrong_entries[self.selected_row][self.selected_col] = value
+            self.notes[self.selected_row][self.selected_col].clear()
             self.mistakes += 1
+            if self.mistakes >= self.MAX_MISTAKES:
+                self.failed = True
+                self.submit_run_result()
             return
 
+        self.wrong_entries[self.selected_row][self.selected_col] = 0
         self.board[self.selected_row][self.selected_col] = value
         self.notes[self.selected_row][self.selected_col].clear()
         self.check_complete()
 
     def check_complete(self) -> None:
         self.completed = self.board == self.solution
+        if self.completed:
+            self.submit_run_result()
 
     def handle_events(self, events: list[pygame.event.Event]) -> None:
         for event in events:
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     self.leave_to_menu()
-                elif event.key == pygame.K_p and not self.completed:
+                elif event.key == pygame.K_p and not self.completed and not self.failed:
                     self.paused = not self.paused
                 elif event.key == pygame.K_F5:
                     self.reset_game()
-                elif self.completed and event.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER):
+                elif (self.completed or self.failed) and event.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER):
                     self.reset_game()
-                elif event.key == pygame.K_TAB:
+                elif event.key == pygame.K_TAB and not self.failed:
                     self.note_mode = not self.note_mode
                 elif event.key in (pygame.K_LEFT, pygame.K_a):
                     self.selected_col = max(0, self.selected_col - 1)
@@ -257,11 +298,13 @@ class SudokuGame(GameBase):
                         self.set_difficulty(label)
                         return
 
-                if self.completed:
+                if self.completed or self.failed:
                     self.reset_game()
                     continue
+
                 if not self.board_rect.collidepoint(event.pos):
                     continue
+
                 cell_size = self.board_rect.width // 9
                 self.selected_col = (event.pos[0] - self.board_rect.x) // cell_size
                 self.selected_row = (event.pos[1] - self.board_rect.y) // cell_size
@@ -274,38 +317,43 @@ class SudokuGame(GameBase):
     def render_notes(self, screen: pygame.Surface, row: int, col: int, rect: pygame.Rect) -> None:
         assert self.note_font is not None
         notes = sorted(self.notes[row][col])
+        mini_cell = rect.width // 3
+
         for number in notes:
             note_row = (number - 1) // 3
             note_col = (number - 1) % 3
-            x = rect.x + 8 + note_col * 18
-            y = rect.y + 6 + note_row * 16
+            center_x = rect.x + note_col * mini_cell + mini_cell // 2
+            center_y = rect.y + note_row * mini_cell + mini_cell // 2
             surface = self.note_font.render(str(number), True, theme.MUTED_TEXT)
-            screen.blit(surface, (x, y))
+            screen.blit(surface, surface.get_rect(center=(center_x, center_y)))
 
     def render(self, screen: pygame.Surface) -> None:
         assert self.ui is not None
         assert self.value_font is not None
+        assert self.message_font is not None
 
         self.rebuild_layout(screen)
         screen.fill(theme.BACKGROUND)
 
+        mistakes_left = max(0, self.MAX_MISTAKES - self.mistakes)
         self.ui.draw_header(
             screen,
             "Sudoku",
-            "Arrow Keys / WASD move. 1-9 enters values. Tab toggles notes.",
+            "Arrow Keys / WASD move. 1-9 enters values. Tab toggles notes. 3 mistakes ends the run.",
         )
         self.ui.draw_stats_row(
             screen,
             [
                 f"Difficulty: {self.difficulty}",
                 f"Moves: {self.moves}",
-                f"Mistakes: {self.mistakes}",
-                f"Mode: {'Notes' if self.note_mode else 'Values'}",
+                f"Mistakes: {self.mistakes}/{self.MAX_MISTAKES}",
+                f"Lives Left: {mistakes_left}",
             ],
         )
-        sub = "Generated puzzle with a unique solution." if not self.completed else "Puzzle solved."
+        mode_text = "Mode: Notes" if self.note_mode else "Mode: Values"
+        sub = f"Generated puzzle with a unique solution. {mode_text}"
         self.ui.draw_sub_stats(screen, sub)
-        self.ui.draw_footer(screen, "P: Pause  |  Tab: Notes  |  F5: New Puzzle  |  Esc: Back")
+        self.ui.draw_footer(screen, "P: Pause  |  Tab: Notes  |  Delete/0: Clear Cell  |  F5: New Puzzle  |  Esc: Back")
 
         pygame.draw.rect(screen, theme.SURFACE, self.board_rect, border_radius=theme.RADIUS_MEDIUM)
         pygame.draw.rect(screen, theme.SURFACE_ALT, self.board_rect, width=2, border_radius=theme.RADIUS_MEDIUM)
@@ -333,9 +381,14 @@ class SudokuGame(GameBase):
                 pygame.draw.rect(screen, theme.SURFACE_ALT, rect, width=1, border_radius=2)
 
                 value = self.board[r][c]
+                wrong_value = self.wrong_entries[r][c]
+
                 if value:
                     color = theme.TEXT if self.is_given(r, c) else theme.ACCENT
                     surface = self.value_font.render(str(value), True, color)
+                    screen.blit(surface, surface.get_rect(center=rect.center))
+                elif wrong_value:
+                    surface = self.value_font.render(str(wrong_value), True, theme.DANGER)
                     screen.blit(surface, surface.get_rect(center=rect.center))
                 else:
                     self.render_notes(screen, r, c, rect)
@@ -347,7 +400,12 @@ class SudokuGame(GameBase):
             pygame.draw.line(screen, theme.TEXT, (x, self.board_rect.y), (x, self.board_rect.bottom), width)
             pygame.draw.line(screen, theme.TEXT, (self.board_rect.x, y), (self.board_rect.right, y), width)
 
-        if self.paused and not self.completed:
+        warning_text = f"Mistakes remaining: {mistakes_left}"
+        warning_color = theme.DANGER if mistakes_left <= 1 else theme.MUTED_TEXT
+        warning_surface = self.message_font.render(warning_text, True, warning_color)
+        screen.blit(warning_surface, warning_surface.get_rect(midleft=(self.play_rect.right - 290, self.play_rect.top + 125)))
+
+        if self.paused and not self.completed and not self.failed:
             self.ui.draw_pause_overlay(screen, self.play_rect)
 
         if self.completed:
@@ -356,5 +414,13 @@ class SudokuGame(GameBase):
                 self.play_rect,
                 "Puzzle Complete",
                 f"Mistakes: {self.mistakes}",
+                f"Moves: {self.moves}  |  Difficulty: {self.difficulty}",
+            )
+        elif self.failed:
+            self.ui.draw_game_over(
+                screen,
+                self.play_rect,
+                "Game Over",
+                f"Too many mistakes ({self.mistakes}/{self.MAX_MISTAKES})",
                 f"Moves: {self.moves}  |  Difficulty: {self.difficulty}",
             )

@@ -5,6 +5,7 @@ import random
 import pygame
 
 from arcade_app.core.game_base import GameBase
+from arcade_app.core.run_result import RunResult
 from arcade_app.ui import theme
 from arcade_app.ui.game_ui import GameUI
 
@@ -50,6 +51,7 @@ class SpaceInvadersGame(GameBase):
 
         self.game_over = False
         self.paused = False
+        self.result_submitted = False
 
     def enter(self) -> None:
         self.ui = GameUI()
@@ -90,6 +92,7 @@ class SpaceInvadersGame(GameBase):
         self.invader_direction = 1
         self.rapid_fire_timer = 0.0
         self.shield_timer = 0.0
+        self.result_submitted = False
 
         self.spawn_wave()
 
@@ -114,6 +117,21 @@ class SpaceInvadersGame(GameBase):
 
         self.invader_speed = 32.0 + self.wave * 6
         self.invader_move_delay = max(0.12, 0.45 - self.wave * 0.03)
+
+    def submit_run_result(self) -> None:
+        if self.result_submitted:
+            return
+
+        self.result_submitted = True
+        result = RunResult(
+            game_id=self.game_id,
+            score=self.score,
+            metadata={
+                "wave": self.wave,
+                "lives": self.lives,
+            },
+        )
+        self.app.save_data.submit_run_result(result)
 
     def add_popup(self, text: str, pos: tuple[int, int], color: tuple[int, int, int]) -> None:
         self.popups.append(
@@ -308,11 +326,13 @@ class SpaceInvadersGame(GameBase):
                     self.lives -= 1
                     if self.lives <= 0:
                         self.game_over = True
+                        self.submit_run_result()
                 break
 
         for invader in self.invaders:
             if invader.bottom >= self.player.top:
                 self.game_over = True
+                self.submit_run_result()
                 break
 
         self.enemy_shot_timer -= dt

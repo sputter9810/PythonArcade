@@ -11,8 +11,9 @@ from arcade_app.ui.card import Card
 
 
 class GameSelectScene(SceneBase):
-    def __init__(self, app) -> None:
+    def __init__(self, app, initial_game_id: str | None = None) -> None:
         super().__init__(app)
+        self.initial_game_id = initial_game_id
         self.title_font: pygame.font.Font | None = None
         self.subtitle_font: pygame.font.Font | None = None
         self.card_title_font: pygame.font.Font | None = None
@@ -22,6 +23,7 @@ class GameSelectScene(SceneBase):
         self.stats_font: pygame.font.Font | None = None
         self.recent_font: pygame.font.Font | None = None
         self.search_font: pygame.font.Font | None = None
+        self.small_font: pygame.font.Font | None = None
 
         self.cols = 3
         self.rows = 2
@@ -36,7 +38,7 @@ class GameSelectScene(SceneBase):
 
         self.search_query = ""
         self.search_focused = False
-        self.search_rect = pygame.Rect(90, 112, 360, 42)
+        self.search_rect = pygame.Rect(90, 146, 470, 42)
 
     def enter(self) -> None:
         self.title_font = pygame.font.SysFont("arial", 48, bold=True)
@@ -48,36 +50,47 @@ class GameSelectScene(SceneBase):
         self.stats_font = pygame.font.SysFont("arial", 18)
         self.recent_font = pygame.font.SysFont("arial", 16)
         self.search_font = pygame.font.SysFont("arial", 20)
+        self.small_font = pygame.font.SysFont("arial", 15)
 
         self.current_page = 0
         self.selected_slot = 0
         self.hovered_slot = None
         self.search_focused = False
-        self.focus_last_played_page()
+        if self.initial_game_id:
+            self.focus_game_id(self.initial_game_id)
+        else:
+            self.focus_last_played_page()
 
     def filtered_games(self) -> list[dict]:
         query = self.search_query.strip().lower()
-        if not query:
-            return GAME_REGISTRY
+        favorites = set(self.app.save_data.get_favorite_game_ids())
 
-        filtered: list[dict] = []
-        for game in GAME_REGISTRY:
-            haystack = " ".join(
-                [
-                    str(game.get("title", "")),
-                    str(game.get("description", "")),
-                    str(game.get("category", "")),
-                    " ".join(game.get("modes", [])),
-                ]
-            ).lower()
-            if query in haystack:
-                filtered.append(game)
+        games = GAME_REGISTRY
+        if query:
+            filtered: list[dict] = []
+            for game in games:
+                haystack = " ".join(
+                    [
+                        str(game.get("title", "")),
+                        str(game.get("description", "")),
+                        str(game.get("category", "")),
+                        " ".join(game.get("modes", [])),
+                    ]
+                ).lower()
+                if query in haystack:
+                    filtered.append(game)
+            games = filtered
 
-        return filtered
+        return sorted(
+            games,
+            key=lambda game: (
+                0 if game["id"] in favorites else 1,
+                str(game.get("title", "")).lower(),
+            ),
+        )
 
     def total_pages(self) -> int:
-        games = self.filtered_games()
-        return max(1, math.ceil(len(games) / self.games_per_page))
+        return max(1, math.ceil(len(self.filtered_games()) / self.games_per_page))
 
     def current_page_games(self) -> list[dict]:
         games = self.filtered_games()
@@ -94,9 +107,7 @@ class GameSelectScene(SceneBase):
         return games[self.selected_slot]
 
     def ensure_valid_selection(self) -> None:
-        total_pages = self.total_pages()
-        self.current_page = max(0, min(self.current_page, total_pages - 1))
-
+        self.current_page = max(0, min(self.current_page, self.total_pages() - 1))
         games = self.current_page_games()
         if not games:
             self.selected_slot = 0
@@ -121,24 +132,19 @@ class GameSelectScene(SceneBase):
                 self.launch_selected_game()
                 return
 
-        for index, game in enumerate(GAME_REGISTRY):
+    def focus_game_id(self, game_id: str) -> None:
+        games = self.filtered_games()
+        for index, game in enumerate(games):
             if game["id"] == game_id:
                 self.current_page = index // self.games_per_page
                 self.selected_slot = index % self.games_per_page
-                self.launch_selected_game()
                 return
 
     def focus_last_played_page(self) -> None:
         last_played_id = self.app.save_data.get_last_played_game_id()
         if last_played_id is None:
             return
-
-        games = self.filtered_games()
-        for index, game in enumerate(games):
-            if game["id"] == last_played_id:
-                self.current_page = index // self.games_per_page
-                self.selected_slot = index % self.games_per_page
-                return
+        self.focus_game_id(last_played_id)
 
     def move_selection(self, dx: int, dy: int) -> None:
         games = self.current_page_games()
@@ -150,8 +156,8 @@ class GameSelectScene(SceneBase):
 
         new_row = max(0, min(self.rows - 1, current_row + dy))
         new_col = max(0, min(self.cols - 1, current_col + dx))
-
         new_slot = new_row * self.cols + new_col
+
         if new_slot < len(games):
             self.selected_slot = new_slot
 
@@ -160,17 +166,19 @@ class GameSelectScene(SceneBase):
         if new_page != self.current_page:
             self.current_page = new_page
             self.hovered_slot = None
-
             games = self.current_page_games()
-            if games:
-                self.selected_slot = min(self.selected_slot, len(games) - 1)
-            else:
-                self.selected_slot = 0
+            self.selected_slot = min(self.selected_slot, max(0, len(games) - 1))
+
+    def toggle_favorite_for_selected(self) -> None:
+        selected_game = self.selected_game()
+        if selected_game is None:
+            return
+        self.app.save_data.toggle_favorite(selected_game["id"])
 
     def rebuild_card_rects(self, screen: pygame.Surface) -> None:
         side_margin = 90
-        grid_top = 230
-        grid_bottom_margin = 210
+        grid_top = 260
+        grid_bottom_margin = 180
         gap_x = 28
         gap_y = 24
 
@@ -178,33 +186,31 @@ class GameSelectScene(SceneBase):
         grid_height = screen.get_height() - grid_top - grid_bottom_margin
 
         card_width = (grid_width - gap_x * (self.cols - 1)) // self.cols
-        card_height = (grid_height - gap_y * (self.rows - 1)) // self.rows
+        base_card_height = (grid_height - gap_y * (self.rows - 1)) // self.rows
+        card_height = base_card_height + 20
 
-        games = self.current_page_games()
         self.card_rects = []
-
-        for i in range(len(games)):
+        for i in range(len(self.current_page_games())):
             row = i // self.cols
             col = i % self.cols
             x = side_margin + col * (card_width + gap_x)
             y = grid_top + row * (card_height + gap_y)
             self.card_rects.append(pygame.Rect(x, y, card_width, card_height))
 
-    def rebuild_recent_rects(self, screen: pygame.Surface) -> None:
+    def rebuild_recent_rects(self) -> None:
         recent_ids = self.app.save_data.get_recent_game_ids()[:4]
         self.recent_rects = []
         if not recent_ids:
             return
 
         x = 90
-        y = 170
+        y = 220
         gap = 12
 
         for game_id in recent_ids:
             game = get_game_by_id(game_id)
             if game is None:
                 continue
-
             width = max(150, min(250, 42 + len(game["title"]) * 9))
             rect = pygame.Rect(x, y, width, 38)
             self.recent_rects.append((game_id, rect))
@@ -217,42 +223,47 @@ class GameSelectScene(SceneBase):
         self.hovered_slot = None
         self.ensure_valid_selection()
 
-    def clear_search(self) -> None:
-        self.update_search_query("")
-        self.search_focused = False
-
     def handle_search_input(self, event: pygame.event.Event) -> None:
         if event.key == pygame.K_ESCAPE:
-            if self.search_query:
-                self.update_search_query("")
-            else:
-                self.search_focused = False
+            self.search_focused = False
             return
-
         if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
             self.search_focused = False
             return
-
         if event.key == pygame.K_BACKSPACE:
             self.update_search_query(self.search_query[:-1])
             return
-
         if event.key == pygame.K_SPACE:
             self.update_search_query(self.search_query + " ")
             return
-
         if event.unicode and event.unicode.isprintable():
-            char = event.unicode
-            if char.isalnum() or char in (" ", "-", "_", "'"):
-                self.update_search_query(self.search_query + char)
+            if event.unicode.isalnum() or event.unicode in (" ", "-", "_", "'"):
+                self.update_search_query(self.search_query + event.unicode)
 
     def handle_navigation_input(self, event: pygame.event.Event) -> None:
         if event.key == pygame.K_ESCAPE:
             from arcade_app.scenes.main_menu_scene import MainMenuScene
-
             self.app.scene_manager.go_to(MainMenuScene(self.app))
         elif event.key == pygame.K_SLASH:
             self.search_focused = True
+        elif event.key == pygame.K_TAB:
+            from arcade_app.scenes.game_details_scene import GameDetailsScene
+            selected = self.selected_game()
+            if selected:
+                self.app.scene_manager.go_to(GameDetailsScene(self.app, selected["id"]))
+        elif event.key == pygame.K_h:
+            from arcade_app.scenes.achievements_scene import AchievementsScene
+            self.app.scene_manager.go_to(AchievementsScene(self.app, return_scene="library"))
+        elif event.key == pygame.K_c:
+            from arcade_app.scenes.daily_challenge_scene import DailyChallengeScene
+            selected = self.selected_game()
+            preferred_id = selected["id"] if selected else None
+            self.app.scene_manager.go_to(DailyChallengeScene(self.app, preferred_game_id=preferred_id, return_scene="library"))
+        elif event.key == pygame.K_p:
+            from arcade_app.scenes.profile_manager_scene import ProfileManagerScene
+            self.app.scene_manager.go_to(ProfileManagerScene(self.app, return_scene="library"))
+        elif event.key == pygame.K_f:
+            self.toggle_favorite_for_selected()
         elif event.key in (pygame.K_LEFT, pygame.K_a):
             self.move_selection(-1, 0)
         elif event.key in (pygame.K_RIGHT, pygame.K_d):
@@ -287,12 +298,10 @@ class GameSelectScene(SceneBase):
 
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 mouse_pos = event.pos
-
                 if self.search_rect.collidepoint(mouse_pos):
                     self.search_focused = True
                     continue
-                else:
-                    self.search_focused = False
+                self.search_focused = False
 
                 for game_id, rect in self.recent_rects:
                     if rect.collidepoint(mouse_pos):
@@ -307,11 +316,11 @@ class GameSelectScene(SceneBase):
 
     def update(self, dt: float) -> None:
         self.ensure_valid_selection()
+        self.rebuild_recent_rects()
 
     def build_card_footer(self, game_id: str) -> str:
         stats = self.app.save_data.get_game_stats(game_id)
         play_count = stats.get("play_count")
-
         if isinstance(play_count, int) and play_count > 0:
             return f"Played {play_count} time" if play_count == 1 else f"Played {play_count} times"
         return "Not played yet"
@@ -322,30 +331,17 @@ class GameSelectScene(SceneBase):
             return "No saved stats yet"
 
         parts: list[str] = []
-
-        play_count = stats.get("play_count")
-        if isinstance(play_count, int):
-            parts.append(f"Plays: {play_count}")
-
-        best_score = stats.get("best_score")
-        if isinstance(best_score, int):
-            parts.append(f"Best Score: {best_score}")
-
-        best_round = stats.get("best_round")
-        if isinstance(best_round, int):
-            parts.append(f"Best Round: {best_round}")
-
-        best_wave = stats.get("best_wave")
-        if isinstance(best_wave, int):
-            parts.append(f"Best Wave: {best_wave}")
-
-        best_lines = stats.get("best_lines")
-        if isinstance(best_lines, int):
-            parts.append(f"Best Lines: {best_lines}")
-
-        best_hits = stats.get("best_hits")
-        if isinstance(best_hits, int):
-            parts.append(f"Best Hits: {best_hits}")
+        for label, key in (
+            ("Plays", "play_count"),
+            ("Best Score", "best_score"),
+            ("Best Round", "best_round"),
+            ("Best Wave", "best_wave"),
+            ("Best Lines", "best_lines"),
+            ("Best Hits", "best_hits"),
+        ):
+            value = stats.get(key)
+            if isinstance(value, int):
+                parts.append(f"{label}: {value}")
 
         best_accuracy = stats.get("best_accuracy")
         if isinstance(best_accuracy, (int, float)):
@@ -355,16 +351,15 @@ class GameSelectScene(SceneBase):
         if isinstance(best_reaction_ms, int):
             parts.append(f"Best RT: {best_reaction_ms} ms")
 
-        if not parts:
-            return "No saved stats yet"
-
-        return "  |  ".join(parts)
+        return "  |  ".join(parts) if parts else "No saved stats yet"
 
     def build_card_badges(self, game: dict) -> list[str]:
-        category = str(game.get("category", "Unknown"))
+        badges = [str(game.get("category", "Unknown"))]
         modes = game.get("modes", [])
-        mode_label = "/".join(modes[:2]) if modes else "Solo"
-        return [category, mode_label]
+        badges.append("/".join(modes[:2]) if modes else "Solo")
+        if self.app.save_data.is_favorite(game["id"]):
+            badges.append("Favorite")
+        return badges
 
     def build_card_hero(self, game: dict) -> str:
         words = str(game.get("title", "")).replace("-", " ").split()
@@ -380,54 +375,65 @@ class GameSelectScene(SceneBase):
             return
 
         category = selected_game.get("category", "Unknown")
-        modes = ", ".join(selected_game.get("modes", []))
+        modes = " | ".join(selected_game.get("modes", []))
         status = "Ready to Play" if selected_game.get("implemented", False) else "Coming Soon"
 
         meta_text = f"{category}  |  {modes}  |  {status}"
         meta_surface = self.meta_font.render(meta_text, True, theme.MUTED_TEXT)
-        screen.blit(
-            meta_surface,
-            meta_surface.get_rect(center=(screen.get_width() // 2, screen.get_height() - 118)),
-        )
+        screen.blit(meta_surface, meta_surface.get_rect(center=(screen.get_width() // 2, screen.get_height() - 118)))
 
         stats_line = self.build_stats_line(selected_game["id"])
         stats_surface = self.stats_font.render(stats_line, True, theme.MUTED_TEXT)
-        screen.blit(
-            stats_surface,
-            stats_surface.get_rect(center=(screen.get_width() // 2, screen.get_height() - 88)),
-        )
+        screen.blit(stats_surface, stats_surface.get_rect(center=(screen.get_width() // 2, screen.get_height() - 88)))
 
     def render_page_indicator(self, screen: pygame.Surface) -> None:
         assert self.meta_font is not None
-
         total_results = len(self.filtered_games())
         page_text = f"Page {self.current_page + 1} / {self.total_pages()}"
-
         if self.search_query:
             page_text = f"{page_text}  |  {total_results} results"
-
         page_surface = self.meta_font.render(page_text, True, theme.MUTED_TEXT)
-        screen.blit(page_surface, page_surface.get_rect(topright=(screen.get_width() - 90, 178)))
+        screen.blit(page_surface, page_surface.get_rect(topright=(screen.get_width() - 90, 232)))
+
+    def render_profile_panel(self, screen: pygame.Surface) -> None:
+        assert self.meta_font is not None
+        assert self.stats_font is not None
+        assert self.small_font is not None
+
+        profile = self.app.save_data.get_profile_summary()
+        panel_rect = pygame.Rect(screen.get_width() - 370, 120, 280, 110)
+
+        pygame.draw.rect(screen, theme.SURFACE, panel_rect, border_radius=theme.RADIUS_MEDIUM)
+        pygame.draw.rect(screen, theme.SURFACE_ALT, panel_rect, width=2, border_radius=theme.RADIUS_MEDIUM)
+
+        title = self.meta_font.render(profile["name"], True, theme.TEXT)
+        sessions = self.stats_font.render(f"Sessions played: {profile['total_sessions']}", True, theme.MUTED_TEXT)
+        unique = self.stats_font.render(f"Unique games: {profile['unique_games']}", True, theme.MUTED_TEXT)
+        achievements = self.small_font.render(f"Achievements: {profile['achievement_count']}", True, theme.WARNING)
+        hint = self.small_font.render("P: Profiles  |  H: Achievements", True, theme.MUTED_TEXT)
+
+        screen.blit(title, title.get_rect(topleft=(panel_rect.x + 16, panel_rect.y + 12)))
+        screen.blit(sessions, sessions.get_rect(topleft=(panel_rect.x + 16, panel_rect.y + 42)))
+        screen.blit(unique, unique.get_rect(topleft=(panel_rect.x + 16, panel_rect.y + 62)))
+        screen.blit(achievements, achievements.get_rect(topleft=(panel_rect.x + 16, panel_rect.y + 84)))
+        screen.blit(hint, hint.get_rect(bottomright=(panel_rect.right - 14, panel_rect.bottom - 10)))
 
     def render_recent_games(self, screen: pygame.Surface) -> None:
         assert self.recent_font is not None
         assert self.stats_font is not None
 
-        self.rebuild_recent_rects(screen)
-
         label = self.stats_font.render("Recently Played", True, theme.MUTED_TEXT)
-        screen.blit(label, label.get_rect(topleft=(90, 176)))
+        screen.blit(label, label.get_rect(topleft=(90, 226)))
 
         if not self.recent_rects:
             empty = self.recent_font.render("No recent games yet", True, theme.MUTED_TEXT)
-            screen.blit(empty, empty.get_rect(topleft=(240, 179)))
+            screen.blit(empty, empty.get_rect(topleft=(240, 229)))
             return
 
         for game_id, rect in self.recent_rects:
             game = get_game_by_id(game_id)
             if game is None:
                 continue
-
             pygame.draw.rect(screen, theme.SURFACE, rect, border_radius=999)
             pygame.draw.rect(screen, theme.SURFACE_ALT, rect, width=1, border_radius=999)
             text_surface = self.recent_font.render(game["title"], True, theme.TEXT)
@@ -436,13 +442,11 @@ class GameSelectScene(SceneBase):
     def render_search_bar(self, screen: pygame.Surface) -> None:
         assert self.search_font is not None
 
-        self.search_rect = pygame.Rect(90, 112, 360, 42)
+        self.search_rect = pygame.Rect(90, 146, 470, 42)
 
-        fill = theme.SURFACE
         border = theme.ACCENT if self.search_focused else theme.SURFACE_ALT
         border_width = 3 if self.search_focused else 2
-
-        pygame.draw.rect(screen, fill, self.search_rect, border_radius=999)
+        pygame.draw.rect(screen, theme.SURFACE, self.search_rect, border_radius=999)
         pygame.draw.rect(screen, border, self.search_rect, width=border_width, border_radius=999)
 
         prefix = "Search: "
@@ -465,7 +469,6 @@ class GameSelectScene(SceneBase):
         assert self.title_font is not None
         assert self.subtitle_font is not None
         assert self.card_title_font is not None
-        assert self.card_body_font is not None
         assert self.footer_font is not None
         assert self.stats_font is not None
         assert self.search_font is not None
@@ -474,19 +477,19 @@ class GameSelectScene(SceneBase):
         self.rebuild_card_rects(screen)
         screen.fill(theme.BACKGROUND)
 
-        title = self.title_font.render("Choose a Game", True, theme.TEXT)
+        title = self.title_font.render("Arcade Library", True, theme.TEXT)
         subtitle = self.subtitle_font.render(
-            "Cleaner library layout with more room per game.",
+            "Arrows/WASD: Move  |  Enter: Play  |  F: Favorite  |  P: Profiles  |  H: Achievements  |  Q/E: Page  |  /: Search  |  Tab: Details",
             True,
             theme.MUTED_TEXT,
         )
-
-        screen.blit(title, title.get_rect(center=(screen.get_width() // 2, 48)))
-        screen.blit(subtitle, subtitle.get_rect(center=(screen.get_width() // 2, 92)))
+        screen.blit(title, title.get_rect(topleft=(90, 40)))
+        screen.blit(subtitle, subtitle.get_rect(topleft=(90, 92)))
 
         self.render_search_bar(screen)
-        self.render_recent_games(screen)
+        self.render_profile_panel(screen)
         self.render_page_indicator(screen)
+        self.render_recent_games(screen)
 
         games = self.current_page_games()
         for i, game in enumerate(games):
@@ -511,29 +514,17 @@ class GameSelectScene(SceneBase):
             empty_surface = self.meta_font.render("No games match that search.", True, theme.MUTED_TEXT)
             screen.blit(empty_surface, empty_surface.get_rect(center=(screen.get_width() // 2, 420)))
 
-        last_played_id = self.app.save_data.get_last_played_game_id()
-        if last_played_id is not None:
-            last_played_game = get_game_by_id(last_played_id)
-            last_played_label = last_played_game["title"] if last_played_game is not None else last_played_id
-
-            last_played_surface = self.stats_font.render(
-                f"Last Played: {last_played_label}",
-                True,
-                theme.MUTED_TEXT,
-            )
-            screen.blit(
-                last_played_surface,
-                last_played_surface.get_rect(center=(screen.get_width() // 2, screen.get_height() - 148)),
-            )
+        selected = self.selected_game()
+        if selected is not None:
+            favorite_text = "Favorite game" if self.app.save_data.is_favorite(selected["id"]) else "Press F to favorite"
+            favorite_surface = self.stats_font.render(favorite_text, True, theme.MUTED_TEXT)
+            screen.blit(favorite_surface, favorite_surface.get_rect(center=(screen.get_width() // 2, screen.get_height() - 148)))
 
         self.render_selected_game_meta(screen)
 
         footer_text = self.footer_font.render(
-            "Navigation: Arrow Keys/WASD  |  / or Click: Search  |  Enter: Open/Exit Search  |  Q/E: Page  |  Esc: Back",
+            "Esc: Back  |  Recent chips are clickable  |  Favorite games sort to the top",
             True,
             theme.MUTED_TEXT,
         )
-        screen.blit(
-            footer_text,
-            footer_text.get_rect(center=(screen.get_width() // 2, screen.get_height() - 40)),
-        )
+        screen.blit(footer_text, footer_text.get_rect(center=(screen.get_width() // 2, screen.get_height() - 40)))
